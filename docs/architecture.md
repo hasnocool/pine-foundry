@@ -66,7 +66,7 @@ News retrieval is outside the market hot path. Source failures are isolated.
 Normalized news is:
 - deduplicated by canonical URL
 - enriched with catalyst category
-- grouped into story clusters
+- grouped with a deterministic semantic-hybrid clusterer
 - retained in a bounded cache
 
 ## Catalyst path
@@ -83,7 +83,7 @@ The evidence endpoint joins:
 
 ## Journal
 
-The journal is an asynchronous bounded channel feeding JSONL files:
+The live journal is an asynchronous bounded channel feeding JSONL files:
 
 ~~~text
 MarketEvent
@@ -119,9 +119,11 @@ This is intentionally not a second implementation of the metric logic.
 
 ## Extension points
 
-Next research-layer candidates:
-- DuckDB/Parquet persistence after benchmark.
-- Semantic story clustering.
+Research-layer extensions:
+- JSONL vs DuckDB/Parquet benchmarking via scripts/benchmark_event_storage.py.
+- Optional DuckDB/Parquet materialization downstream of the live journal.
+- Semantic-hybrid story clustering with configurable similarity and time windows.
+- Configurable issuer-specific RSS/Atom feeds.
 - Issuer-specific Canadian feeds where documented public endpoints exist.
 - Executable-size modeling.
 - Historical relative-volume and volatility baselines.
