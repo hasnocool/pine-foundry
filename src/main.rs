@@ -1257,6 +1257,10 @@ async fn api_news_cache(State(s): State<AppState>) -> Json<Vec<NewsArticle>> {
     Json(s.news.cache().await)
 }
 
+async fn api_news_clusters(State(s): State<AppState>) -> Json<Vec<news::StoryCluster>> {
+    Json(s.news.clusters().await)
+}
+
 async fn api_news_health(State(s): State<AppState>) -> Json<Vec<NewsProviderHealth>> {
     Json(s.news.health().await)
 }
@@ -1508,6 +1512,57 @@ pub(crate) async fn ingest_book(
     }
 
     publish_market_state(s, updated).await;
+}
+
+
+pub(crate) async fn ingest_news_articles(s: &AppState, articles: &[NewsArticle]) {
+    if articles.is_empty() {
+        return;
+    }
+
+    let now = now_ms();
+    let mut updates = Vec::new();
+    {
+        let mut market = s.market.write().await;
+        for article in articles {
+            let Some(ticker) = article.ticker.as_ref() else { continue; };
+            let symbol = ticker.to_ascii_uppercase();
+            let Some(state) = market.get_mut(&symbol) else { continue; };
+            let timestamp = article.published_at_ms.unwrap_or(now);
+            let source = article.source.clone().unwrap_or_else(|| article.provider.clone());
+
+            state.news_events.push_back((timestamp, source));
+            while let Some((timestamp, _)) = state.news_events.front() {
+                if *timestamp < now - 60 * 60_000 {
+                    state.news_events.pop_front();
+                } else {
+                    break;
+                }
+            }
+            state.last_catalyst = Some(article.event_type.clone());
+            state.last_updated_ms = now.max(state.last_updated_ms);
+            updates.push(state.clone());
+        }
+    }
+
+    for article in articles {
+        if let Ok(payload) = serde_json::to_value(article) {
+            s.journal.append(JournalRecord {
+                event_id: Uuid::new_v4().to_string(),
+                received_at_ms: now,
+                kind: "news".to_string(),
+                symbol: article.ticker.clone(),
+                provider: Some(article.provider.clone()),
+                venue: article.source.clone(),
+                sequence: None,
+                payload,
+            });
+        }
+    }
+
+    for state in updates {
+        publish_market_state(s, state).await;
+    }
 }
 
 pub(crate) async fn ingest(
@@ -1846,6 +1901,7 @@ async fn run_server() {
         .route("/api/news/google", get(api_news_google))
         .route("/api/news/newsapi", get(api_news_newsapi))
         .route("/api/news/cache", get(api_news_cache))
+        .route("/api/news/clusters", get(api_news_clusters))
         .route("/api/news/health", get(api_news_health))
         .route("/api/presets", get(list_presets).post(create_preset))
         .route("/api/presets/:id", delete(delete_preset))
