@@ -514,6 +514,65 @@ impl PresetStore {
     }
 }
 
+fn current_book_metrics(s: &SecurityState) -> BookMetrics {
+    let primary = crypto_primary_provider();
+    let mut selected: Option<&OrderBookState> = None;
+    let mut fallback: Option<&OrderBookState> = None;
+
+    for (key, book) in &s.books {
+        if fallback.is_none() {
+            fallback = Some(book);
+        }
+        if key.to_ascii_lowercase().contains(&primary) {
+            selected = Some(book);
+            break;
+        }
+    }
+
+    selected.or(fallback).map(OrderBookState::metrics).unwrap_or_default()
+}
+
+fn cross_venue_dislocation_bps(s: &SecurityState) -> Option<f64> {
+    let prices = s.venues.values().filter_map(|venue| venue.last_price).filter(|p| *p > 0.0).collect::<Vec<_>>();
+    if prices.len() < 2 {
+        return None;
+    }
+    let min = prices.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = prices.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let mid = (min + max) / 2.0;
+    (mid > 0.0).then_some((max - min) / mid * 10_000.0)
+}
+
+fn news_metrics(s: &SecurityState) -> (f64, f64, f64, f64) {
+    let now = now_ms();
+    let five = now - 5 * 60_000;
+    let fifteen = now - 15 * 60_000;
+    let hour = now - 60 * 60_000;
+
+    let mut count_5m = 0.0;
+    let mut count_15m = 0.0;
+    let mut count_hour = 0.0;
+    let mut sources = HashSet::new();
+
+    for (timestamp, source) in &s.news_events {
+        if *timestamp < hour {
+            continue;
+        }
+        count_hour += 1.0;
+        if *timestamp >= five {
+            count_5m += 1.0;
+        }
+        if *timestamp >= fifteen {
+            count_15m += 1.0;
+            sources.insert(source.clone());
+        }
+    }
+
+    let baseline = (count_hour / 4.0).max(0.25);
+    let velocity = (count_15m / baseline - 1.0) * 100.0;
+    (count_5m, count_15m, velocity.max(-100.0), sources.len() as f64)
+}
+
 fn metrics(s: &SecurityState) -> Metrics {
     let pct = |from: f64| if from.abs() < f64::EPSILON { None } else { Some((s.last_price / from - 1.0) * 100.0) };
     let change = s.previous_close.map(|p| s.last_price - p);
@@ -523,6 +582,15 @@ fn metrics(s: &SecurityState) -> Metrics {
         s.minute_buckets.iter().rev().find(|b| b.start_ms <= target).map(|b| b.close_price)
     };
     let volume_1m = s.minute_buckets.back().map(|b| b.volume).unwrap_or(0.0);
+    let book = current_book_metrics(s);
+    let (news_count_5m, news_count_15m, news_velocity, news_sources_15m) = news_metrics(s);
+    let total_trade_volume = s.buy_volume + s.sell_volume;
+    let trade_imbalance = if total_trade_volume > 0.0 {
+        Some((s.buy_volume - s.sell_volume) / total_trade_volume)
+    } else {
+        None
+    };
+
     Metrics {
         change,
         change_pct_prev_close,
@@ -530,6 +598,17 @@ fn metrics(s: &SecurityState) -> Metrics {
         change_pct_5m: find_price(5).and_then(pct),
         change_pct_15m: find_price(15).and_then(pct),
         volume_1m,
+        spread_bps: book.spread_bps,
+        book_imbalance: book.book_imbalance,
+        liquidity_score: book.liquidity_score,
+        trade_imbalance,
+        cvd: s.cvd,
+        cross_venue_dislocation_bps: cross_venue_dislocation_bps(s),
+        news_count_5m,
+        news_count_15m,
+        news_velocity,
+        news_sources_15m,
+        stream_age_ms: (now_ms() - s.last_updated_ms).max(0) as f64,
     }
 }
 
@@ -549,6 +628,17 @@ fn row(s: &SecurityState) -> ScannerRow {
         shares_float: s.shares_float,
         shares_outstanding: s.shares_outstanding,
         market_cap: s.market_cap,
+        spread_bps: m.spread_bps,
+        book_imbalance: m.book_imbalance,
+        liquidity_score: m.liquidity_score,
+        trade_imbalance: m.trade_imbalance,
+        cvd: m.cvd,
+        cross_venue_dislocation_bps: m.cross_venue_dislocation_bps,
+        news_count_5m: m.news_count_5m,
+        news_count_15m: m.news_count_15m,
+        news_velocity: m.news_velocity,
+        news_sources_15m: m.news_sources_15m,
+        stream_age_ms: m.stream_age_ms,
         session: s.session,
         updated_at_ms: s.last_updated_ms,
     }
@@ -569,7 +659,24 @@ fn field_value(field: Field, s: &SecurityState) -> Option<f64> {
         Field::SharesOutstanding => s.shares_outstanding,
         Field::MarketCap => s.market_cap,
         Field::IssueType => None,
+        Field::SpreadBps => m.spread_bps,
+        Field::BookImbalance => m.book_imbalance,
+        Field::LiquidityScore => Some(m.liquidity_score),
+        Field::TradeImbalance => m.trade_imbalance,
+        Field::Cvd => Some(m.cvd),
+        Field::CrossVenueDislocationBps => m.cross_venue_dislocation_bps,
+        Field::NewsCount5m => Some(m.news_count_5m),
+        Field::NewsCount15m => Some(m.news_count_15m),
+        Field::NewsVelocity => Some(m.news_velocity),
+        Field::NewsSources15m => Some(m.news_sources_15m),
+        Field::StreamAgeMs => Some(m.stream_age_ms),
     }
+}
+
+fn crypto_primary_provider() -> String {
+    env::var("PINE_FOUNDRY_CRYPTO_PRIMARY")
+        .unwrap_or_else(|_| "binance".to_string())
+        .to_ascii_lowercase()
 }
 
 fn matches_scan(def: &ScanDefinition, s: &SecurityState) -> bool {
