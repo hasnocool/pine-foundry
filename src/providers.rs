@@ -42,7 +42,7 @@ pub struct ProviderHealth {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PublicQuote {
     pub symbol: String,
     pub price: f64,
