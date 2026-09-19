@@ -61,20 +61,26 @@ impl OrderBookState {
         sequence: Option<u64>,
         ts_ms: i64,
     ) -> bool {
+        let mut gap = false;
         if let (Some(previous), Some(current)) = (self.sequence, sequence) {
             if current <= previous {
                 return false;
             }
-            if current > previous.saturating_add(1) {
-                self.valid = false;
-            }
+            gap = current > previous.saturating_add(1);
+        }
+
+        if gap {
+            self.valid = false;
+            self.last_update_ms = ts_ms;
+            self.sequence = sequence;
+            return false;
         }
 
         apply_levels(&mut self.bids, bids, BookSide::Bid);
         apply_levels(&mut self.asks, asks, BookSide::Ask);
         self.sequence = sequence.or(self.sequence);
         self.last_update_ms = ts_ms;
-        self.valid = !self.bids.is_empty() || !self.asks.is_empty();
+        self.valid = !self.bids.is_empty() && !self.asks.is_empty();
         true
     }
 
@@ -207,6 +213,24 @@ mod tests {
         assert_eq!(metrics.best_ask, Some(101.0));
         assert!(metrics.spread_bps.unwrap() > 0.0);
         assert!(metrics.book_imbalance.unwrap() > 0.0);
+    }
+
+    #[test]
+    fn detects_sequence_gap() {
+        let mut book = OrderBookState::default();
+        book.replace(
+            vec![BookLevel { price: 99.0, quantity: 1.0 }],
+            vec![BookLevel { price: 101.0, quantity: 1.0 }],
+            Some(10),
+            1,
+        );
+        assert!(!book.apply_update(
+            &[BookLevel { price: 99.5, quantity: 1.0 }],
+            &[BookLevel { price: 100.5, quantity: 1.0 }],
+            Some(12),
+            2,
+        ));
+        assert!(!book.valid);
     }
 
     #[test]
