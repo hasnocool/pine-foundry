@@ -4,7 +4,10 @@
 type Field =
   | "price" | "change" | "change_pct_prev_close" | "change_pct_1m"
   | "change_pct_5m" | "change_pct_15m" | "day_volume" | "volume_1m"
-  | "shares_float" | "shares_outstanding" | "market_cap" | "issue_type";
+  | "shares_float" | "shares_outstanding" | "market_cap" | "issue_type"
+  | "spread_bps" | "book_imbalance" | "liquidity_score" | "trade_imbalance"
+  | "cvd" | "cross_venue_dislocation_bps" | "news_count_5m" | "news_count_15m"
+  | "news_velocity" | "news_sources_15m" | "stream_age_ms";
 type Filter = { field: Field; enabled: boolean; min: number | null; max: number | null; equals?: string | null };
 type Column = { field: Field; width: number; visible: boolean };
 type Definition = {
@@ -28,6 +31,17 @@ type Row = {
   shares_float: number | null;
   shares_outstanding: number | null;
   market_cap: number | null;
+  spread_bps: number | null;
+  book_imbalance: number | null;
+  liquidity_score: number;
+  trade_imbalance: number | null;
+  cvd: number;
+  cross_venue_dislocation_bps: number | null;
+  news_count_5m: number;
+  news_count_15m: number;
+  news_velocity: number;
+  news_sources_15m: number;
+  stream_age_ms: number;
 };
 type Preset = { id: string; name: string; builtin: boolean; definition: Definition };
 type NewsArticle = {
@@ -57,7 +71,10 @@ const labels: Record<Field, string> = {
   day_volume: "Day Volume", volume_1m: "Volume (1m)", shares_float: "Shares Float",
   shares_outstanding: "Shares Outstanding", market_cap: "Market Cap", issue_type: "Issue Type"
 };
-const pctFields = new Set<Field>(["change_pct_prev_close","change_pct_1m","change_pct_5m","change_pct_15m"]);
+const pctFields = new Set<Field>([
+  "change_pct_prev_close","change_pct_1m","change_pct_5m","change_pct_15m",
+  "book_imbalance","trade_imbalance","news_velocity"
+]);
 const state = {
   scanId: "",
   definition: null as Definition | null,
