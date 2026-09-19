@@ -442,9 +442,7 @@ async function loadNews(query: string) {
   state.newsQuery = clean;
   try {
     const looksLikeTicker = /^\$?[A-Za-z0-9._=/-]{1,15}$/.test(clean);
-    const url = looksLikeTicker
-NaN
-      : `${API}/api/news/search?q=${encodeURIComponent(clean)}&limit=25`;
+    const url = looksLikeTicker ? `${API}/api/news/ticker/${encodeURIComponent(clean)}` : `${API}/api/news/search?q=${encodeURIComponent(clean)}&limit=25`;
     const response = await fetch(url);
     if (!response.ok) throw new Error(await response.text());
     state.news = await response.json() as NewsArticle[];
