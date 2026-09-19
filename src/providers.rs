@@ -23,7 +23,7 @@ pub enum ProviderId {
 }
 
 impl ProviderId {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::TradingView => "tradingview",
             Self::Yahoo => "yahoo",
