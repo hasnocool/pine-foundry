@@ -135,7 +135,13 @@ struct UniverseSpec {
 }
 fn default_session() -> MarketSession { MarketSession::Regular }
 impl Default for UniverseSpec {
-    fn default() -> Self { Self { issue_types: vec![], session: MarketSession::Regular } }
+    fn default() -> Self {
+        Self {
+            issue_types: vec![],
+            asset_classes: vec![],
+            session: MarketSession::Regular,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
