@@ -2639,6 +2639,35 @@ mod tests {
     }
 
     #[test]
+    fn trade_flow_and_vwap_metrics_are_populated() {
+        let now = 1_800_000_000_000_i64;
+        let mut state = SecurityState::new("BTCUSDT", 100.0, 0.0, 0.0, 0.0, now);
+        state.minute_buckets.push_back(MinuteBucket {
+            start_ms: now - 60_000,
+            close_price: 99.0,
+            volume: 10.0,
+            notional: 990.0,
+            buy_volume: 7.0,
+            sell_volume: 3.0,
+            trade_count: 4,
+        });
+        state.minute_buckets.push_back(MinuteBucket {
+            start_ms: now,
+            close_price: 100.0,
+            volume: 20.0,
+            notional: 2000.0,
+            buy_volume: 15.0,
+            sell_volume: 5.0,
+            trade_count: 6,
+        });
+        let m = metrics(&state);
+        assert_eq!(m.trade_count_1m, 6.0);
+        assert_eq!(m.buy_volume_1m, 15.0);
+        assert_eq!(m.sell_volume_1m, 5.0);
+        assert!(m.vwap_15m.unwrap() > 99.0);
+    }
+
+    #[test]
     fn advanced_metrics_are_populated() {
         let now = 1_800_000_000_000_i64;
         let mut state = SecurityState::new("BTCUSDT", 100.0, 0.0, 0.0, 0.0, now);
