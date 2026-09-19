@@ -64,7 +64,8 @@ enum Field {
     DayVolume, Volume1m, SharesFloat, SharesOutstanding, MarketCap, IssueType,
     SpreadBps, BookImbalance, LiquidityScore, TradeImbalance, Cvd,
     CrossVenueDislocationBps, NewsCount5m, NewsCount15m, NewsVelocity,
-    NewsSources15m, StreamAgeMs,
+    NewsSources15m, StreamAgeMs, RelativeVolume15m, Volatility15mPct,
+    ExecutableBuy1000, ExecutableSell1000,
 }
 
 impl Field {
@@ -250,6 +251,10 @@ struct Metrics {
     news_velocity: f64,
     news_sources_15m: f64,
     stream_age_ms: f64,
+    relative_volume_15m: f64,
+    volatility_15m_pct: f64,
+    executable_buy_1000: f64,
+    executable_sell_1000: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -390,7 +395,8 @@ fn default_columns() -> Vec<ColumnSpec> {
         Field::SpreadBps, Field::BookImbalance, Field::LiquidityScore,
         Field::TradeImbalance, Field::Cvd, Field::CrossVenueDislocationBps,
         Field::NewsCount5m, Field::NewsCount15m, Field::NewsVelocity,
-        Field::NewsSources15m, Field::StreamAgeMs,
+        Field::NewsSources15m, Field::StreamAgeMs, Field::RelativeVolume15m,
+        Field::Volatility15mPct, Field::ExecutableBuy1000, Field::ExecutableSell1000,
     ].into_iter().map(|field| ColumnSpec { field, width: 120, visible: true }).collect()
 }
 
