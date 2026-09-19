@@ -935,7 +935,10 @@ async fn publish_market_state(s: &AppState, updated: SecurityState) {
 }
 
 async fn ingest_public_quote(s: &AppState, quote: PublicQuote) {
-    let session = configured_live_session();
+    let session = match quote.asset_class {
+        providers::AssetClass::Equity => configured_live_session(),
+        providers::AssetClass::Crypto | providers::AssetClass::Fx => MarketSession::Regular,
+    };
     let updated = {
         let mut market = s.market.write().await;
         let state = market.entry(quote.symbol.clone())
