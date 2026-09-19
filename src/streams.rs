@@ -532,7 +532,6 @@ async fn run_binance(state: AppState) {
         }
 
         reconnect_attempts = reconnect_attempts.saturating_add(1);
-        reconnect_attempts = reconnect_attempts.saturating_add(1);
         sleep(reconnect_delay(reconnect_attempts)).await;
     }
 }
@@ -876,6 +875,7 @@ async fn run_coinbase(state: AppState) {
             }
         }
 
-        sleep(Duration::from_secs(reconnect_secs())).await;
+        reconnect_attempts = reconnect_attempts.saturating_add(1);
+        sleep(reconnect_delay(reconnect_attempts)).await;
     }
 }
