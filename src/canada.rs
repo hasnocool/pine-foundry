@@ -1,5 +1,5 @@
 // src/canada.rs
-use crate::{journal::EventJournal, news::{NewsArticle, NewsRouter}, now_ms};
+use crate::{news::{NewsArticle, NewsRouter}, now_ms};
 use futures_util::stream::{self, StreamExt};
 use serde::Serialize;
 use std::{collections::HashSet, env, sync::Arc};
