@@ -1,4 +1,5 @@
 // src/main.rs
+mod semantic;
 mod providers;
 mod streams;
 mod news;
