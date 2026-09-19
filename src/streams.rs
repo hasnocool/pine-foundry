@@ -243,7 +243,7 @@ async fn run_kraken(state: AppState) {
                     "method": "subscribe",
                     "params": {
                         "channel": "trade",
-                        "symbol": pairs,
+                        "symbol": pairs.clone(),
                         "snapshot": false
                     }
                 });
@@ -340,7 +340,7 @@ async fn run_coinbase(state: AppState) {
             Ok((mut socket, _)) => {
                 let trade_subscription = json!({
                     "type": "subscribe",
-                    "product_ids": products,
+                    "product_ids": products.clone(),
                     "channel": "market_trades"
                 });
                 let heartbeat_subscription = json!({
