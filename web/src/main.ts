@@ -83,6 +83,15 @@ type SymbolEvidence = {
   symbol: string;
   row: Row;
   catalyst: string | null;
+  catalysts: Array<{
+    id: string;
+    timestamp_ms: number;
+    category: string;
+    source: string;
+    confidence: number;
+    title: string;
+    url: string | null;
+  }>;
   venues: EvidenceVenue[];
   recent_news: NewsArticle[];
 };
@@ -200,6 +209,15 @@ function renderEvidence() {
             <div>Spread: ${fmt(v.book.spread_bps)} bps · Imbalance: ${fmt(v.book.book_imbalance, "pct")}</div>
             <div>Liquidity: ${fmt(v.book.liquidity_score)} · Age: ${fmt(v.age_ms)} ms</div>
           </div>`).join("")}
+      </div>
+      <div class="evidence-catalysts">
+        <strong>Recent catalysts</strong>
+        ${e.catalysts.slice(0,8).map(c => `
+          <div class="catalyst-row">
+            <span>${escapeHtml(c.category)}</span>
+            <strong>${escapeHtml(c.title)}</strong>
+            <small>${escapeHtml(c.source)} · ${(c.confidence * 100).toFixed(0)}%</small>
+          </div>`).join("") || "<p class='muted'>No recent catalysts.</p>"}
       </div>
       <div class="evidence-news">
         <strong>Related news</strong>
