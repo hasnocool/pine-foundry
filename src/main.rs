@@ -1020,6 +1020,17 @@ async fn provider_health(State(s): State<AppState>) -> Json<Vec<ProviderHealth>>
     Json(s.providers.health().await)
 }
 
+async fn catalysts_for_symbol(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<Vec<CatalystEvent>>, (StatusCode, String)> {
+    let market = s.market.read().await;
+    let state = market
+        .get(&symbol.to_ascii_uppercase())
+        .ok_or((StatusCode::NOT_FOUND, "symbol not found".to_string()))?;
+    Ok(Json(state.catalysts.iter().rev().cloned().collect()))
+}
+
 async fn symbol_evidence(
     State(s): State<AppState>,
     Path(symbol): Path<String>,
@@ -2127,6 +2138,7 @@ async fn run_server() {
         .route("/api/streams/health", get(stream_health))
         .route("/api/journal/health", get(journal_health))
         .route("/api/evidence/:symbol", get(symbol_evidence))
+        .route("/api/catalysts/:symbol", get(catalysts_for_symbol))
         .route("/api/filings/health", get(filing_health))
         .route("/api/filings/:ticker", get(filing_search))
         .route("/api/canada/disclosures/:ticker", get(canadian_disclosure_search))
