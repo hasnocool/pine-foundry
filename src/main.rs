@@ -414,6 +414,7 @@ struct AppState {
     canada: Arc<CanadianDisclosureRouter>,
     journal: Arc<EventJournal>,
     streams: Arc<streams::StreamHealthStore>,
+    replay_mode: bool,
 }
 
 struct PresetStore {
@@ -1840,6 +1841,7 @@ async fn ingest_public_quote(s: &AppState, quote: PublicQuote) {
         let state = market
             .entry(symbol.clone())
             .or_insert_with(|| SecurityState::blank(&symbol, quote.price, session, ts_ms));
+        state.replay_mode = s.replay_mode;
         let old_volume = state.day_volume;
 
         state.asset_class = quote.asset_class;
@@ -1924,6 +1926,7 @@ pub(crate) async fn ingest_book(
         let state = market
             .entry(symbol.clone())
             .or_insert_with(|| SecurityState::blank(&symbol, mid_hint, MarketSession::Regular, ts_ms));
+        state.replay_mode = s.replay_mode;
         let key = venue.to_ascii_lowercase();
         let book = state.books.entry(key.clone()).or_default();
         let accepted = if snapshot {
@@ -2394,6 +2397,7 @@ async fn run_server() {
         canada,
         journal,
         streams: stream_store,
+        replay_mode: false,
     };
 
     let app = Router::new()
@@ -2503,13 +2507,8 @@ async fn run_replay(date: String) {
         canada: Arc::new(CanadianDisclosureRouter::new(replay_news)),
         journal,
         streams: Arc::new(streams::StreamHealthStore::new()),
+        replay_mode: true,
     };
-    {
-        let mut market = state.market.write().await;
-        for state in market.values_mut() {
-            state.replay_mode = true;
-        }
-    }
 
     let mut counts = HashMap::<String, usize>::new();
     for record in records {
