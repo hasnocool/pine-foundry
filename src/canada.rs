@@ -14,14 +14,13 @@ pub struct CanadianDisclosureHealth {
 #[derive(Clone)]
 pub struct CanadianDisclosureRouter {
     news: Arc<NewsRouter>,
-    journal: Arc<EventJournal>,
     health: Arc<RwLock<CanadianDisclosureHealth>>,
     seen: Arc<RwLock<HashSet<String>>>,
 }
 
 impl CanadianDisclosureRouter {
-    pub fn new(news: Arc<NewsRouter>, journal: Arc<EventJournal>) -> Self {
-        Self { news, journal, health: Arc::new(RwLock::new(CanadianDisclosureHealth {
+    pub fn new(news: Arc<NewsRouter>) -> Self {
+        Self { news, health: Arc::new(RwLock::new(CanadianDisclosureHealth {
             status: "unprobed".to_string(), requests: 0, successes: 0, failures: 0,
             last_success_ms: None, last_error: None,
         })), seen: Arc::new(RwLock::new(HashSet::new())) }
