@@ -47,10 +47,21 @@ GET /api/scans/:id/snapshot
 
 Scanner fields include the original equity fields plus:
 - spread_bps
+- best_bid
+- best_ask
+- mid_price
+- microprice
+- bid_depth_5 / ask_depth_5
+- bid_depth_10 / ask_depth_10
 - book_imbalance
 - liquidity_score
 - trade_imbalance
 - cvd
+- trade_count_1m
+- trade_rate_1m
+- buy_volume_1m
+- sell_volume_1m
+- vwap_15m
 - cross_venue_dislocation_bps
 - news_count_5m
 - news_count_15m
