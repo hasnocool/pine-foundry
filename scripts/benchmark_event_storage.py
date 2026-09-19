@@ -137,6 +137,15 @@ def input_glob(events_dir: Path, pattern: str) -> str:
     return sql_path(events_dir / pattern)
 
 
+def input_relation(paths: list[Path], events_dir: Path, pattern: str) -> str:
+    if len(paths) == 1:
+        return f"read_ndjson_auto('{sql_path(paths[0])}')"
+    if len(paths) == len(discover_files(events_dir, pattern, 0)):
+        return f"read_ndjson_auto('{input_glob(events_dir, pattern)}')"
+    quoted = ", ".join(f"'{sql_path(path)}'" for path in paths)
+    return f"read_ndjson_auto([{quoted}], union_by_name=true)
+
+
 def main() -> int:
     args = parse_args()
     if args.runs < 1:
@@ -171,7 +180,7 @@ def main() -> int:
             parquet.unlink()
         connection = duckdb.connect(str(database))
 
-    glob = input_glob(args.events_dir, args.pattern)
+    relation = input_relation(input_files, args.events_dir, args.pattern)
     print(f"DuckDB version: {duckdb.__version__}")
 
     connection.execute("DROP TABLE IF EXISTS events")
@@ -180,10 +189,13 @@ def main() -> int:
         f"""
         CREATE TABLE events AS
         SELECT *
-        FROM read_ndjson_auto('{glob}')
+        FROM {relation}
         """
     )
     materialize_ms = (time.perf_counter() - materialize_started) * 1000.0
+
+    if parquet.exists():
+        parquet.unlink()
 
     connection.execute(
         f"""
@@ -208,27 +220,28 @@ def main() -> int:
     """
     duckdb_jsonl_query = f"""
         SELECT kind, count(*) AS rows
-        FROM read_ndjson_auto('{glob}')
+        FROM {relation}
         GROUP BY kind
         ORDER BY kind
     """
 
     benchmarks = []
-    for name, operation in (
+    if args.mode == "benchmark":
+        for name, operation in (
         ("duckdb_jsonl_scan", lambda: connection.execute(duckdb_jsonl_query).fetchall()),
         ("duckdb_table_scan", lambda: connection.execute(query).fetchall()),
         ("parquet_scan", lambda: connection.execute(parquet_query).fetchall()),
     ):
         durations = timed(args.runs, operation)
-        benchmarks.append(
-            {
-                "name": name,
-                "median_ms": round(median_ms(durations), 3),
-                "runs": len(durations),
-                "min_ms": round(min(durations) * 1000.0, 3),
-                "max_ms": round(max(durations) * 1000.0, 3),
-            }
-        )
+            benchmarks.append(
+                {
+                    "name": name,
+                    "median_ms": round(median_ms(durations), 3),
+                    "runs": len(durations),
+                    "min_ms": round(min(durations) * 1000.0, 3),
+                    "max_ms": round(max(durations) * 1000.0, 3),
+                }
+            )
 
     connection.close()
 
