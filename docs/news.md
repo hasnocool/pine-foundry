@@ -48,7 +48,7 @@ PINE_FOUNDRY_NEWSAPI_MIN_INTERVAL_SECS=1800
 PINE_FOUNDRY_NEWSAPI_DAILY_LIMIT=90
 ~~~
 
-The guard is process-local and intentionally conservative so a large ticker universe cannot consume the API allowance on every polling loop.
+The interval guard is applied per normalized query, while the daily limit is shared across all NewsAPI requests in the process. This lets multiple tickers receive coverage without allowing the polling loop to exhaust the configured daily budget.
 
 ## Fresh-story processing
 
