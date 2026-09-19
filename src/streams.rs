@@ -210,6 +210,16 @@ fn reconnect_secs() -> u64 {
         .clamp(1, 60)
 }
 
+fn ws_max_secs() -> u64 {
+    env::var("PINE_FOUNDRY_CRYPTO_WS_MAX_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(23 * 60 * 60)
+        .clamp(300, 24 * 60 * 60)
+}
+
+
+
 fn reconnect_delay(attempt: u32) -> Duration {
     let base = reconnect_secs().saturating_mul(1u64 << attempt.min(5));
     let capped = base.min(60);
@@ -476,7 +486,18 @@ async fn run_binance(state: AppState) {
                     resync_book(&state, symbol, providers::ProviderId::Binance).await;
                 }
 
-                while let Some(message) = socket.next().await {
+                let mut lifetime = Box::pin(sleep(Duration::from_secs(ws_max_secs())));
+                loop {
+                    let Some(message) = tokio::select! {
+                        _ = &mut lifetime => {
+                            eprintln!("crypto websocket: renewing Binance connection");
+                            None
+                        }
+                        message = socket.next() => message,
+                    } else {
+                        break;
+                    };
+
                     match message {
                         Ok(Message::Text(text)) => {
                             state.streams.message("binance").await;
@@ -634,7 +655,18 @@ async fn run_kraken(state: AppState) {
                     continue;
                 }
 
-                while let Some(message) = socket.next().await {
+                let mut lifetime = Box::pin(sleep(Duration::from_secs(ws_max_secs())));
+                loop {
+                    let Some(message) = tokio::select! {
+                        _ = &mut lifetime => {
+                            eprintln!("crypto websocket: renewing Kraken connection");
+                            None
+                        }
+                        message = socket.next() => message,
+                    } else {
+                        break;
+                    };
+
                     match message {
                         Ok(Message::Text(text)) => {
                             state.streams.message("kraken").await;
@@ -796,7 +828,18 @@ async fn run_coinbase(state: AppState) {
                     .send(Message::Text(heartbeat_subscription.to_string().into()))
                     .await;
 
-                while let Some(message) = socket.next().await {
+                let mut lifetime = Box::pin(sleep(Duration::from_secs(ws_max_secs())));
+                loop {
+                    let Some(message) = tokio::select! {
+                        _ = &mut lifetime => {
+                            eprintln!("crypto websocket: renewing Coinbase connection");
+                            None
+                        }
+                        message = socket.next() => message,
+                    } else {
+                        break;
+                    };
+
                     match message {
                         Ok(Message::Text(text)) => {
                             state.streams.message("coinbase").await;
