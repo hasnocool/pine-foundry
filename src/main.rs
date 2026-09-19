@@ -665,28 +665,30 @@ fn news_metrics(s: &SecurityState) -> (f64, f64, f64, f64) {
     let five = now - 5 * 60_000;
     let fifteen = now - 15 * 60_000;
     let hour = now - 60 * 60_000;
+    let previous_15m = now - 30 * 60_000;
 
     let mut count_5m = 0.0;
     let mut count_15m = 0.0;
-    let mut count_hour = 0.0;
+    let mut previous_45m_count = 0.0;
     let mut sources = HashSet::new();
 
     for (timestamp, source) in &s.news_events {
         if *timestamp < hour {
             continue;
         }
-        count_hour += 1.0;
         if *timestamp >= five {
             count_5m += 1.0;
         }
         if *timestamp >= fifteen {
             count_15m += 1.0;
             sources.insert(source.clone());
+        } else if *timestamp >= previous_15m {
+            previous_45m_count += 1.0;
         }
     }
 
-    let baseline = (count_hour / 4.0).max(0.25);
-    let velocity = (count_15m / baseline - 1.0) * 100.0;
+    let baseline_15m = (previous_45m_count / 3.0).max(0.25);
+    let velocity = (count_15m / baseline_15m - 1.0) * 100.0;
     (count_5m, count_15m, velocity.max(-100.0), sources.len() as f64)
 }
 
