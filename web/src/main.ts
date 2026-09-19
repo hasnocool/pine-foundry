@@ -139,7 +139,7 @@ const labels: Record<Field, string> = {
   mid_price: "Mid", microprice: "Microprice", bid_depth_5: "Bid Depth (5)",
   ask_depth_5: "Ask Depth (5)", bid_depth_10: "Bid Depth (10)", ask_depth_10: "Ask Depth (10)",
   book_imbalance: "Book Imbalance", liquidity_score: "Liquidity", trade_imbalance: "Trade Imbalance",
-  cvd: "CVD", trade_count_1m: "Trades (1m)", trade_rate_1m: "Trade Rate (1m)",
+  cvd: "CVD", trade_count_1m: "Trades (1m)", trade_rate_1m: "Trades/sec (1m avg)",
   buy_volume_1m: "Buy Volume (1m)", sell_volume_1m: "Sell Volume (1m)", vwap_15m: "VWAP (15m)",
   cross_venue_dislocation_bps: "Cross-Venue (bps)",
   news_count_5m: "News (5m)", news_count_15m: "News (15m)",
