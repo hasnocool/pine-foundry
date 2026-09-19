@@ -60,7 +60,7 @@ pub struct NewsProviderHealth {
 
 #[derive(Clone)]
 struct NewsApiControl {
-    last_request_ms: Option<i64>,
+    last_request_by_query: HashMap<String, i64>,
     window_day: String,
     day_count: u32,
 }
@@ -117,7 +117,7 @@ impl NewsRouter {
             cache: Arc::new(RwLock::new(Vec::new())),
             clusters: Arc::new(RwLock::new(HashMap::new())),
             newsapi_control: Arc::new(RwLock::new(NewsApiControl {
-                last_request_ms: None,
+                last_request_by_query: HashMap::new(),
                 window_day: String::new(),
                 day_count: 0,
             })),
@@ -286,17 +286,18 @@ impl NewsRouter {
             if control.window_day != today {
                 control.window_day = today;
                 control.day_count = 0;
-                control.last_request_ms = None;
+                control.last_request_by_query.clear();
             }
             if control.day_count >= daily_limit {
                 return Err("newsapi daily request guard reached".to_string());
             }
-            if let Some(last) = control.last_request_ms {
-                if now_ms().saturating_sub(last) < min_interval_secs * 1000 {
+            let query_key = query.trim().to_ascii_lowercase();
+            if let Some(last) = control.last_request_by_query.get(&query_key) {
+                if now_ms().saturating_sub(*last) < min_interval_secs * 1000 {
                     return Err("newsapi request interval guard active".to_string());
                 }
             }
-            control.last_request_ms = Some(now_ms());
+            control.last_request_by_query.insert(query_key, now_ms());
             control.day_count += 1;
         }
 
