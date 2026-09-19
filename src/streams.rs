@@ -350,6 +350,7 @@ async fn resync_book(state: &AppState, symbol: &str, provider: providers::Provid
             providers::ProviderId::Coinbase => "Coinbase",
             _ => "Crypto",
         }.to_string(),
+        None,
         sequence,
         true,
         bids,
@@ -410,7 +411,7 @@ async fn run_binance(state: AppState) {
             let lower = symbol.to_ascii_lowercase();
             [
                 format!("{lower}@aggTrade"),
-                format!("{lower}@depth5@100ms"),
+                format!("{lower}@depth@100ms"),
             ]
         })
         .collect::<Vec<_>>();
@@ -424,6 +425,11 @@ async fn run_binance(state: AppState) {
         match connect_async(&url).await {
             Ok((mut socket, _)) => {
                 state.streams.connected("binance").await;
+
+                for symbol in &symbols {
+                    resync_book(&state, symbol, providers::ProviderId::Binance).await;
+                }
+
                 while let Some(message) = socket.next().await {
                     match message {
                         Ok(Message::Text(text)) => {
@@ -464,22 +470,27 @@ async fn run_binance(state: AppState) {
                                 )
                                 .await;
                             } else if event_type == "depthUpdate" || data.get("lastUpdateId").is_some() {
+                                let first_sequence = as_u64(data.get("U"));
                                 let sequence = as_u64(data.get("u")).or_else(|| as_u64(data.get("lastUpdateId")));
                                 let ts_ms = data.get("E").and_then(Value::as_i64).unwrap_or_else(now_ms);
                                 let bids = parse_levels(data.get("b").or_else(|| data.get("bids")));
                                 let asks = parse_levels(data.get("a").or_else(|| data.get("asks")));
                                 state.streams.book("binance", ts_ms, sequence).await;
-                                let _ = ingest_book(
+                                let accepted = ingest_book(
                                     &state,
-                                    symbol,
+                                    symbol.clone(),
                                     providers::ProviderId::Binance,
                                     "Binance".to_string(),
+                                    first_sequence,
                                     sequence,
-                                    true,
+                                    false,
                                     bids,
                                     asks,
                                     ts_ms,
                                 ).await;
+                                if !accepted {
+                                    resync_book(&state, &symbol, providers::ProviderId::Binance).await;
+                                }
                             }
                         }
                         Ok(Message::Ping(payload)) => {
@@ -628,6 +639,7 @@ async fn run_kraken(state: AppState) {
                                         symbol.clone(),
                                         providers::ProviderId::Kraken,
                                         "Kraken".to_string(),
+                                        None,
                                         None,
                                         snapshot,
                                         bids,
@@ -799,12 +811,13 @@ async fn run_coinbase(state: AppState) {
                                             }
                                         }
                                         let ts_ms = timestamp_ms(event.get("event_time"));
-                                        state.streams.book("coinbase", ts_ms, sequence).await;
+                                        state.streams.book("coinbase", ts_ms, None).await;
                                         let accepted = ingest_book(
                                             &state,
                                             symbol.clone(),
                                             providers::ProviderId::Coinbase,
                                             "Coinbase".to_string(),
+                                            None,
                                             sequence,
                                             snapshot,
                                             bids,
