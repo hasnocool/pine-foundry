@@ -5,6 +5,7 @@ pub const METHOD: &str = "semantic-hybrid-v1";
 
 #[derive(Debug, Clone, Default)]
 pub struct SemanticFeatures {
+    pub headline_terms: Vec<String>,
     pub core_terms: Vec<String>,
     pub terms: Vec<String>,
     pub fingerprint: u64,
@@ -16,10 +17,15 @@ pub fn features(
     ticker: Option<&str>,
     event_type: &str,
 ) -> SemanticFeatures {
-    let mut tokens = tokenize(title);
+    let headline_terms = tokenize(title);
+    let mut tokens = headline_terms.clone();
     if let Some(description) = description {
         tokens.extend(tokenize(description));
     }
+
+    let mut headline_terms = headline_terms.into_iter().collect::<Vec<_>>();
+    headline_terms.sort();
+    headline_terms.dedup();
 
     let mut core_terms = tokens.iter().cloned().collect::<HashSet<_>>();
     let mut terms = core_terms.clone();
@@ -44,6 +50,7 @@ pub fn features(
     terms.truncate(96);
 
     SemanticFeatures {
+        headline_terms,
         core_terms,
         fingerprint: simhash(&terms),
         terms,
@@ -54,6 +61,16 @@ pub fn similarity(left: &SemanticFeatures, right: &SemanticFeatures) -> f64 {
     if left.terms.is_empty() || right.terms.is_empty() {
         return 0.0;
     }
+
+    let left_headline = left.headline_terms.iter().collect::<HashSet<_>>();
+    let right_headline = right.headline_terms.iter().collect::<HashSet<_>>();
+    let headline_intersection = left_headline.intersection(&right_headline).count() as f64;
+    let headline_union = left_headline.union(&right_headline).count() as f64;
+    let headline_jaccard = if headline_union > 0.0 {
+        headline_intersection / headline_union
+    } else {
+        0.0
+    };
 
     let left_core = left.core_terms.iter().collect::<HashSet<_>>();
     let right_core = right.core_terms.iter().collect::<HashSet<_>>();
@@ -74,7 +91,10 @@ pub fn similarity(left: &SemanticFeatures, right: &SemanticFeatures) -> f64 {
     let hamming = (left.fingerprint ^ right.fingerprint).count_ones() as f64;
     let fingerprint_similarity = 1.0 - hamming / 64.0;
 
-    (0.60 * core_jaccard + 0.25 * jaccard + 0.15 * fingerprint_similarity)
+    (0.70 * headline_jaccard
+        + 0.15 * core_jaccard
+        + 0.10 * jaccard
+        + 0.05 * fingerprint_similarity)
         .clamp(0.0, 1.0)
 }
 
