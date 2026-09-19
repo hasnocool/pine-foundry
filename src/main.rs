@@ -227,6 +227,7 @@ struct SecurityState {
     sell_volume: f64,
     cvd: f64,
     news_events: VecDeque<(i64, String)>,
+    catalysts: VecDeque<CatalystEvent>,
     last_catalyst: Option<String>,
 }
 
@@ -249,6 +250,18 @@ struct Metrics {
     news_velocity: f64,
     news_sources_15m: f64,
     stream_age_ms: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CatalystEvent {
+    id: Uuid,
+    symbol: String,
+    timestamp_ms: i64,
+    category: String,
+    source: String,
+    confidence: f64,
+    title: String,
+    url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -364,6 +377,7 @@ struct SymbolEvidence {
     symbol: String,
     row: ScannerRow,
     catalyst: Option<String>,
+    catalysts: Vec<CatalystEvent>,
     venues: Vec<VenueEvidence>,
     recent_news: Vec<NewsArticle>,
 }
@@ -522,6 +536,7 @@ impl SecurityState {
             sell_volume: 0.0,
             cvd: 0.0,
             news_events: VecDeque::new(),
+            catalysts: VecDeque::new(),
             last_catalyst: None,
         }
     }
@@ -1036,6 +1051,7 @@ async fn symbol_evidence(
         symbol: state.symbol.clone(),
         row: row(&state),
         catalyst: state.last_catalyst.clone(),
+        catalysts: state.catalysts.iter().rev().take(20).cloned().collect(),
         venues,
         recent_news,
     }))
@@ -1709,6 +1725,19 @@ pub(crate) async fn ingest_filing_events(s: &AppState, filings: &[FilingEvent]) 
                 }
             }
             state.last_catalyst = Some(filing.event_type.clone());
+            state.catalysts.push_back(CatalystEvent {
+                id: Uuid::new_v4(),
+                symbol: symbol.clone(),
+                timestamp_ms: filing.acceptance_datetime.as_deref()
+                    .and_then(news::parse_date_for_state)
+                    .unwrap_or(now),
+                category: filing.event_type.clone(),
+                source: "SEC EDGAR".to_string(),
+                confidence: 0.95,
+                title: format!("SEC {} filing", filing.form),
+                url: Some(filing.url.clone()),
+            });
+            while state.catalysts.len() > 100 { state.catalysts.pop_front(); }
             state.last_updated_ms = now.max(state.last_updated_ms);
             updates.push(state.clone());
         }
@@ -1744,6 +1773,17 @@ pub(crate) async fn ingest_news_articles(s: &AppState, articles: &[NewsArticle])
                 }
             }
             state.last_catalyst = Some(article.event_type.clone());
+            state.catalysts.push_back(CatalystEvent {
+                id: Uuid::new_v4(),
+                symbol: symbol.clone(),
+                timestamp_ms: timestamp,
+                category: article.event_type.clone(),
+                source: source.clone(),
+                confidence: 0.60,
+                title: article.title.clone(),
+                url: Some(article.url.clone()),
+            });
+            while state.catalysts.len() > 100 { state.catalysts.pop_front(); }
             state.last_updated_ms = now.max(state.last_updated_ms);
             updates.push(state.clone());
         }
