@@ -151,6 +151,9 @@ impl PublicProviderRouter {
             PublicProviderRoute { provider: ProviderId::Binance, route: "GET https://data-api.binance.vision/api/v3/ticker/24hr", auth_required: false, purpose: "crypto 24h ticker", scope: "crypto" },
             PublicProviderRoute { provider: ProviderId::Binance, route: "GET https://data-api.binance.vision/api/v3/klines", auth_required: false, purpose: "crypto OHLCV candles", scope: "crypto" },
             PublicProviderRoute { provider: ProviderId::Binance, route: "GET https://data-api.binance.vision/api/v3/depth", auth_required: false, purpose: "crypto order book", scope: "crypto" },
+            PublicProviderRoute { provider: ProviderId::Binance, route: "WSS wss://stream.binance.com:9443/stream?streams=<symbol>@aggTrade", auth_required: false, purpose: "event-driven aggregate crypto trades", scope: "crypto" },
+            PublicProviderRoute { provider: ProviderId::Kraken, route: "WSS wss://ws.kraken.com/v2 channel=trade", auth_required: false, purpose: "event-driven crypto trades", scope: "crypto" },
+            PublicProviderRoute { provider: ProviderId::Coinbase, route: "WSS wss://advanced-trade-ws.coinbase.com channel=market_trades", auth_required: false, purpose: "event-driven public crypto trades", scope: "crypto" },
 
             PublicProviderRoute { provider: ProviderId::Frankfurter, route: "GET https://api.frankfurter.dev/v2/rate/{base}/{quote}", auth_required: false, purpose: "daily FX reference rate", scope: "FX" },
             PublicProviderRoute { provider: ProviderId::Frankfurter, route: "GET https://api.frankfurter.dev/v2/rates", auth_required: false, purpose: "daily FX reference rates", scope: "FX" },
