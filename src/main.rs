@@ -1,7 +1,9 @@
 // src/main.rs
 mod providers;
+mod streams;
+mod news;
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, Path, State},
+    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post, put},
@@ -9,6 +11,7 @@ use axum::{
 };
 use clap::{Parser, Subcommand};
 use futures_util::{SinkExt, StreamExt};
+use news::{NewsArticle, NewsProviderHealth, NewsRouter};
 use providers::{ProviderHealth, PublicProviderRouter, PublicQuote};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -236,6 +239,7 @@ struct AppState {
     scans: Arc<RwLock<HashMap<Uuid, ScanRuntime>>>,
     presets: Arc<PresetStore>,
     providers: Arc<PublicProviderRouter>,
+    news: Arc<NewsRouter>,
 }
 
 struct PresetStore {
@@ -562,6 +566,7 @@ struct Health {
     service: &'static str,
     feed_mode: String,
     providers: Vec<ProviderHealth>,
+    news: Vec<NewsProviderHealth>,
 }
 
 async fn health(State(s): State<AppState>) -> Json<Health> {
@@ -570,6 +575,7 @@ async fn health(State(s): State<AppState>) -> Json<Health> {
         service: "pine-foundry",
         feed_mode: env::var("PINE_FOUNDRY_FEED").unwrap_or_else(|_| "auto".into()),
         providers: s.providers.health().await,
+        news: s.news.health().await,
     })
 }
 
@@ -967,7 +973,7 @@ async fn ingest_public_quote(s: &AppState, quote: PublicQuote) {
             .or_insert_with(|| SecurityState::blank(&quote.symbol, quote.price, session, quote.ts_ms));
         let old_volume = state.day_volume;
         state.last_price = quote.price;
-        state.previous_close = quote.previous_close.or(state.previous_close);
+        state.issue_type = match quote.issue_type {\n            "common_stock" => IssueType::CommonStock,\n            "etf" => IssueType::Etf,\n            "adr" => IssueType::Adr,\n            "reit" => IssueType::Reit,\n            "etn" => IssueType::Etn,\n            "warrant" => IssueType::Warrant,\n            "preferred" => IssueType::Preferred,\n            "right" => IssueType::Right,\n            "unit" => IssueType::Unit,\n            _ => IssueType::Other,\n        };\n        state.previous_close = quote.previous_close.or(state.previous_close);
         state.shares_float = quote.shares_float.or(state.shares_float);
         state.shares_outstanding = quote.shares_outstanding.or(state.shares_outstanding);
         state.market_cap = quote.market_cap.or(state.market_cap);
@@ -1024,57 +1030,6 @@ fn csv_env(name: &str, default_value: &str) -> Vec<String> {
         .collect()
 }
 
-fn kraken_pair(binance_symbol: &str) -> String {
-    let upper = binance_symbol.to_ascii_uppercase();
-    if let Some(base) = upper.strip_suffix("USDT") {
-        format!("{base}USD")
-    } else if let Some(base) = upper.strip_suffix("USDC") {
-        format!("{base}USD")
-    } else {
-        upper
-    }
-}
-
-fn coinbase_product(binance_symbol: &str) -> String {
-    let upper = binance_symbol.to_ascii_uppercase();
-    if let Some(base) = upper.strip_suffix("USDT") {
-        format!("{base}-USD")
-    } else if let Some(base) = upper.strip_suffix("USDC") {
-        format!("{base}-USD")
-    } else {
-        upper
-    }
-}
-
-async fn live_crypto_feed(s: AppState) {
-    let symbols = csv_env(
-        "PINE_FOUNDRY_CRYPTO_SYMBOLS",
-        "BTCUSDT,ETHUSDT,SOLUSDT",
-    );
-    let poll_secs = env::var("PINE_FOUNDRY_CRYPTO_POLL_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(2)
-        .max(1);
-    let mut interval = time::interval(Duration::from_secs(poll_secs));
-
-    loop {
-        interval.tick().await;
-        for symbol in &symbols {
-            let quote = match s.providers.binance_quote(symbol).await {
-                Ok(quote) => Some(quote),
-                Err(_) => match s.providers.kraken_ticker(&kraken_pair(symbol)).await {
-                    Ok(quote) => Some(quote),
-                    Err(_) => s.providers.coinbase_ticker(&coinbase_product(symbol)).await.ok(),
-                },
-            };
-
-            if let Some(quote) = quote {
-                ingest_public_quote(&s, quote).await;
-            }
-        }
-    }
-}
 
 async fn live_fx_feed(s: AppState) {
     let pairs = csv_env(
@@ -1298,11 +1253,13 @@ async fn run_server() {
     let address = env::var("PINE_FOUNDRY_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
     let data_dir = PathBuf::from(env::var("PINE_FOUNDRY_DATA_DIR").unwrap_or_else(|_| "data".into()));
     let provider = Arc::new(PublicProviderRouter::new().expect("public provider client"));
+    let news = Arc::new(NewsRouter::new().expect("public news client"));
     let state = AppState {
         market: Arc::new(RwLock::new(seed_market())),
         scans: Arc::new(RwLock::new(HashMap::new())),
         presets: Arc::new(PresetStore::load(data_dir.join("presets.json")).await),
         providers: provider,
+        news,
     };
 
     let app = Router::new()
@@ -1332,7 +1289,7 @@ async fn run_server() {
         .route("/api/providers/frankfurter/:base/rates/:quotes", get(api_frankfurter_rates))
         .route("/api/providers/bank-of-canada/:base/:quote", get(api_bank_of_canada_fx))
         .route("/api/providers/bank-of-canada/series/:series", get(api_bank_of_canada_series))
-        .route("/api/presets", get(list_presets).post(create_preset))
+        .route("/api/news/search", get(api_news_search))\n        .route("/api/news/ticker/:ticker", get(api_news_ticker))\n        .route("/api/news/reddit", get(api_news_reddit))\n        .route("/api/news/google", get(api_news_google))\n        .route("/api/news/newsapi", get(api_news_newsapi))\n        .route("/api/news/cache", get(api_news_cache))\n        .route("/api/news/health", get(api_news_health))\n        .route("/api/presets", get(list_presets).post(create_preset))
         .route("/api/presets/:id", delete(delete_preset))
         .route("/api/scans", get(list_scans).post(create_scan))
         .route("/api/scans/:id", put(update_scan).delete(delete_scan))
@@ -1348,7 +1305,8 @@ async fn run_server() {
         }
         _ => {
             tokio::spawn(live_feed(state.clone()));
-            tokio::spawn(live_crypto_feed(state.clone()));
+            tokio::spawn(streams::run_crypto_websocket_feeds(state.clone()));
+            tokio::spawn(news::run_news_feed(state.news.clone()));
             tokio::spawn(live_fx_feed(state.clone()));
         }
     }
