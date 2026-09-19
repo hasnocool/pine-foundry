@@ -19,6 +19,7 @@ pub enum ProviderId {
     Kraken,
     Coinbase,
     Frankfurter,
+    BankOfCanada,
 }
 
 impl ProviderId {
@@ -31,6 +32,7 @@ impl ProviderId {
             Self::Kraken => "kraken",
             Self::Coinbase => "coinbase",
             Self::Frankfurter => "frankfurter",
+            Self::BankOfCanada => "bank_of_canada",
         }
     }
 }
@@ -107,6 +109,7 @@ impl PublicProviderRouter {
             ProviderId::Kraken,
             ProviderId::Coinbase,
             ProviderId::Frankfurter,
+            ProviderId::BankOfCanada,
         ];
         let health = ids.into_iter().map(|id| (id, health_for(id))).collect();
 
@@ -151,6 +154,8 @@ impl PublicProviderRouter {
 
             PublicProviderRoute { provider: ProviderId::Frankfurter, route: "GET https://api.frankfurter.dev/v2/rate/{base}/{quote}", auth_required: false, purpose: "daily FX reference rate", scope: "FX" },
             PublicProviderRoute { provider: ProviderId::Frankfurter, route: "GET https://api.frankfurter.dev/v2/rates", auth_required: false, purpose: "daily FX reference rates", scope: "FX" },
+            PublicProviderRoute { provider: ProviderId::BankOfCanada, route: "GET https://www.bankofcanada.ca/valet/observations/{series}/json", auth_required: false, purpose: "official Canadian FX/economic observations", scope: "Canada/FX" },
+            PublicProviderRoute { provider: ProviderId::BankOfCanada, route: "GET https://www.bankofcanada.ca/valet/fx_rss", auth_required: false, purpose: "Canadian FX RSS observations", scope: "Canada/FX" },
         ]
     }
 
@@ -796,6 +801,60 @@ impl PublicProviderRouter {
             .await
     }
 
+    pub async fn bank_of_canada_series(
+        &self,
+        series: &str,
+    ) -> Result<Value, String> {
+        let encoded = urlencoding::encode(series);
+        let url = format!(
+            "https://www.bankofcanada.ca/valet/observations/{encoded}/json"
+        );
+        self.request_json(ProviderId::BankOfCanada, Method::GET, &url, None)
+            .await
+    }
+
+    pub async fn bank_of_canada_fx(
+        &self,
+        base: &str,
+        quote: &str,
+    ) -> Result<PublicQuote, String> {
+        let base = base.to_ascii_uppercase();
+        let quote_ccy = quote.to_ascii_uppercase();
+        let value_for = |code: &str| async move {
+            let series = format!("FX{code}CAD");
+            let value = self.bank_of_canada_series(&series).await?;
+            latest_observation_value(&value, &series)
+        };
+
+        let rate = if base == "CAD" {
+            let foreign_to_cad = value_for(&quote_ccy).await?;
+            1.0 / foreign_to_cad
+        } else if quote_ccy == "CAD" {
+            value_for(&base).await?
+        } else {
+            let base_to_cad = value_for(&base).await?;
+            let quote_to_cad = value_for(&quote_ccy).await?;
+            base_to_cad / quote_to_cad
+        };
+
+        Ok(PublicQuote {
+            symbol: format!("{base}{quote_ccy}"),
+            asset_class: AssetClass::Fx,
+            issue_type: "other",
+            venue: "Bank of Canada",
+            price: rate,
+            previous_close: None,
+            change_pct: None,
+            volume: None,
+            market_cap: None,
+            shares_float: None,
+            shares_outstanding: None,
+            ts_ms: now_ms(),
+            session: "regular".to_string(),
+            source: ProviderId::BankOfCanada,
+        })
+    }
+
     pub async fn frankfurter_rate(
         &self,
         base: &str,
@@ -849,6 +908,25 @@ impl PublicProviderRouter {
     }
 }
 
+fn latest_observation_value(value: &Value, series: &str) -> Result<f64, String> {
+    let observations = value
+        .get("observations")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("Bank of Canada series {series} missing observations"))?;
+
+    for observation in observations.iter().rev() {
+        if let Some(value) = observation
+            .get(series.to_ascii_uppercase())
+            .or_else(|| observation.get(series))
+            .and_then(as_f64)
+        {
+            return Ok(value);
+        }
+    }
+
+    Err(format!("Bank of Canada series {series} contains no numeric latest observation"))
+}
+
 fn health_for(id: ProviderId) -> ProviderHealth {
     let (name, auth_required) = match id {
         ProviderId::TradingView => ("TradingView public scanner", false),
@@ -858,6 +936,7 @@ fn health_for(id: ProviderId) -> ProviderHealth {
         ProviderId::Kraken => ("Kraken public market-data API", false),
         ProviderId::Coinbase => ("Coinbase Exchange public market-data API", false),
         ProviderId::Frankfurter => ("Frankfurter reference FX API", false),
+        ProviderId::BankOfCanada => ("Bank of Canada Valet API", false),
     };
 
     ProviderHealth {
