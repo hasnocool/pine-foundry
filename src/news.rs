@@ -59,11 +59,19 @@ pub struct NewsProviderHealth {
 }
 
 #[derive(Clone)]
+struct NewsApiControl {
+    last_request_ms: Option<i64>,
+    window_day: String,
+    day_count: u32,
+}
+
+#[derive(Clone)]
 pub struct NewsRouter {
     client: Client,
     health: Arc<RwLock<HashMap<String, NewsProviderHealth>>>,
     cache: Arc<RwLock<Vec<NewsArticle>>>,
     clusters: Arc<RwLock<HashMap<String, StoryCluster>>>,
+    newsapi_control: Arc<RwLock<NewsApiControl>>,
 }
 
 impl NewsRouter {
@@ -107,6 +115,11 @@ impl NewsRouter {
             health: Arc::new(RwLock::new(health)),
             cache: Arc::new(RwLock::new(Vec::new())),
             clusters: Arc::new(RwLock::new(HashMap::new())),
+            newsapi_control: Arc::new(RwLock::new(NewsApiControl {
+                last_request_ms: None,
+                window_day: String::new(),
+                day_count: 0,
+            })),
         })
     }
 
@@ -253,6 +266,38 @@ impl NewsRouter {
             .map(|value| value - ChronoDuration::hours(lookback_hours))
             .map(|value| value.to_rfc3339())
             .unwrap_or_default();
+        {
+            let min_interval_secs = env::var("PINE_FOUNDRY_NEWSAPI_MIN_INTERVAL_SECS")
+                .ok()
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(1800)
+                .clamp(60, 86_400);
+            let daily_limit = env::var("PINE_FOUNDRY_NEWSAPI_DAILY_LIMIT")
+                .ok()
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(90)
+                .clamp(1, 100);
+            let today = DateTime::from_timestamp_millis(now_ms())
+                .map(|value| value.format("%Y-%m-%d").to_string())
+                .unwrap_or_default();
+            let mut control = self.newsapi_control.write().await;
+            if control.window_day != today {
+                control.window_day = today;
+                control.day_count = 0;
+                control.last_request_ms = None;
+            }
+            if control.day_count >= daily_limit {
+                return Err("newsapi daily request guard reached".to_string());
+            }
+            if let Some(last) = control.last_request_ms {
+                if now_ms().saturating_sub(last) < min_interval_secs * 1000 {
+                    return Err("newsapi request interval guard active".to_string());
+                }
+            }
+            control.last_request_ms = Some(now_ms());
+            control.day_count += 1;
+        }
+
         let url = format!(
             "https://newsapi.org/v2/everything?q={}&from={}&language=en&sortBy=publishedAt&pageSize={}",
             urlencoding::encode(query),
