@@ -37,6 +37,8 @@
 - Kraken public WebSocket trade channel.
 - Coinbase Advanced Trade public market trades.
 - Independent reconnect loops.
+- Exponential reconnect backoff with jitter.
+- Proactive connection renewal.
 - Ping/pong handling.
 - Provider health.
 - Stream staleness.
@@ -75,6 +77,7 @@
 - NewsAPI request guards.
 - URL deduplication.
 - Ticker-aware query expansion.
+- Configurable stock/company aliases.
 - Catalyst keyword classification.
 - Story clustering.
 - News velocity.
