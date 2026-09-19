@@ -172,7 +172,6 @@ struct MinuteBucket {
 }
 
 #[derive(Debug, Clone)]
-#[derive(Debug, Clone)]
 struct VenueState {
     provider: providers::ProviderId,
     venue: String,
@@ -2019,7 +2018,7 @@ async fn run_server() {
 
     tokio::spawn(news::run_news_feed(state.news.clone(), state.clone()));
     tokio::spawn(filings::run_sec_feed(state.filings.clone()));
-    tokio::spawn(canada::run_canadian_disclosure_feed(state.canada.clone()));
+    tokio::spawn(canada::run_canadian_disclosure_feed(state.canada.clone(), state.clone()));
     match env::var("PINE_FOUNDRY_FEED").unwrap_or_else(|_| "auto".into()).to_ascii_lowercase().as_str() {
         "mock" => {
             tokio::spawn(mock_feed(state.clone()));
