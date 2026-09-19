@@ -12,7 +12,7 @@ type Filter = { field: Field; enabled: boolean; min: number | null; max: number 
 type Column = { field: Field; width: number; visible: boolean };
 type Definition = {
   name: string;
-  universe: { issue_types: string[]; session: string };
+  universe: { issue_types: string[]; asset_classes?: string[]; session: string };
   filters: Filter[];
   sort: { field: Field; direction: "asc" | "desc" };
   columns: Column[];
@@ -239,7 +239,7 @@ function renderNews() {
           <span class="muted">Reddit · Google News · NewsAPI</span>
         </div>
         <div class="news-controls">
-          <input id="news-query" value="${escapeHtml(state.newsQuery)}" placeholder="ticker or query">
+          <input id="news-query" value="${escapeHtml(state.newsQuery)}" placeholder="ticker or broad query">
           <button id="news-search">Search</button>
         </div>
       </div>
@@ -249,7 +249,7 @@ function renderNews() {
             <a href="${escapeHtml(article.url)}" target="_blank" rel="noopener noreferrer">
               <strong>${escapeHtml(article.title)}</strong>
             </a>
-            <div class="news-meta">${escapeHtml(article.source ?? article.subreddit ?? article.provider)} · ${escapeHtml(article.published_at ?? "")}</div>
+            <div class="news-meta">${escapeHtml(article.source ?? article.subreddit ?? article.provider)} · ${escapeHtml(article.event_type ?? "general")} · ${escapeHtml(article.published_at ?? "")}</div>
             ${article.description ? `<p>${escapeHtml(article.description)}</p>` : ""}
           </article>`).join("") : "<p class='muted'>No cached news results yet.</p>"}
       </div>
@@ -322,7 +322,7 @@ function wire() {
   document.querySelector("#custom")?.addEventListener("click", async () => {
     state.definition = {
       name: "Custom Scanner",
-      universe: { issue_types: ["common_stock"], session: "regular" },
+      universe: { issue_types: ["common_stock"], asset_classes: ["equity"], session: "regular" },
       filters: [],
       sort: { field: "change_pct_5m", direction: "desc" },
       columns: defaultColumns(),
@@ -441,7 +441,11 @@ async function loadNews(query: string) {
   if (!clean) return;
   state.newsQuery = clean;
   try {
-    const response = await fetch(`${API}/api/news/ticker/${encodeURIComponent(clean)}`);
+    const looksLikeTicker = /^\$?[A-Za-z0-9._=/-]{1,15}$/.test(clean);
+    const url = looksLikeTicker
+NaN
+      : `${API}/api/news/search?q=${encodeURIComponent(clean)}&limit=25`;
+    const response = await fetch(url);
     if (!response.ok) throw new Error(await response.text());
     state.news = await response.json() as NewsArticle[];
   } catch {
