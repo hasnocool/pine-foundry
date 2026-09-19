@@ -925,7 +925,6 @@ fn canonical_article_key(article: &NewsArticle) -> String {
 fn dedupe_and_sort(mut articles: Vec<NewsArticle>) -> Vec<NewsArticle> {
     for article in &mut articles {
         article.event_type = classify_catalyst(&article.title, article.description.as_deref());
-        article.cluster_id = cluster_id_for(&article.title);
     }
     let mut seen = HashSet::new();
     articles.retain(|article| {
