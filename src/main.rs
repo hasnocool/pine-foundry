@@ -1898,17 +1898,19 @@ async fn ingest_public_quote(s: &AppState, quote: PublicQuote) {
         state.clone()
     };
 
-    if let Ok(payload) = serde_json::to_value(&quote) {
-        s.journal.append(JournalRecord {
-            event_id: Uuid::new_v4().to_string(),
-            received_at_ms: now_ms(),
-            kind: "quote".to_string(),
-            symbol: Some(symbol),
-            provider: Some(provider.as_str().to_string()),
-            venue: Some(venue),
-            sequence: None,
-            payload,
-        });
+    if !s.replay_mode {
+        if let Ok(payload) = serde_json::to_value(&quote) {
+            s.journal.append(JournalRecord {
+                event_id: Uuid::new_v4().to_string(),
+                received_at_ms: now_ms(),
+                kind: "quote".to_string(),
+                symbol: Some(symbol),
+                provider: Some(provider.as_str().to_string()),
+                venue: Some(venue),
+                sequence: None,
+                payload,
+            });
+        }
     }
     publish_market_state(s, updated).await;
 }
@@ -1962,27 +1964,29 @@ pub(crate) async fn ingest_book(
         (state.clone(), accepted)
     };
 
-    if let Ok(payload) = serde_json::to_value(serde_json::json!({
-        "symbol": symbol,
-        "provider": provider,
-        "venue": venue,
-        "first_sequence": first_sequence,
-        "sequence": sequence,
-        "snapshot": snapshot,
-        "bids": bids,
-        "asks": asks,
-        "ts_ms": ts_ms
-    })) {
-        s.journal.append(JournalRecord {
-            event_id: Uuid::new_v4().to_string(),
-            received_at_ms: now_ms(),
-            kind: "book".to_string(),
-            symbol: Some(updated.symbol.clone()),
-            provider: Some(provider.as_str().to_string()),
-            venue: Some(venue),
-            sequence,
-            payload,
-        });
+    if !s.replay_mode {
+        if let Ok(payload) = serde_json::to_value(serde_json::json!({
+            "symbol": symbol,
+            "provider": provider,
+            "venue": venue,
+            "first_sequence": first_sequence,
+            "sequence": sequence,
+            "snapshot": snapshot,
+            "bids": bids,
+            "asks": asks,
+            "ts_ms": ts_ms
+        })) {
+            s.journal.append(JournalRecord {
+                event_id: Uuid::new_v4().to_string(),
+                received_at_ms: now_ms(),
+                kind: "book".to_string(),
+                symbol: Some(updated.symbol.clone()),
+                provider: Some(provider.as_str().to_string()),
+                venue: Some(venue),
+                sequence,
+                payload,
+            });
+        }
     }
 
     publish_market_state(s, updated).await;
@@ -2066,8 +2070,9 @@ pub(crate) async fn ingest_news_articles(s: &AppState, articles: &[NewsArticle])
             if state.replay_mode {
                 state.asof_ms = state.asof_ms.max(timestamp);
             }
+            let retention_now = metric_now(state);
             while let Some((timestamp, _)) = state.news_events.front() {
-                if *timestamp < now - 60 * 60_000 {
+                if *timestamp < retention_now - 60 * 60_000 {
                     state.news_events.pop_front();
                 } else {
                     break;
@@ -2089,23 +2094,24 @@ pub(crate) async fn ingest_news_articles(s: &AppState, articles: &[NewsArticle])
                 reaction_15m_pct: None,
             });
             while state.catalysts.len() > 100 { state.catalysts.pop_front(); }
-            state.last_updated_ms = now.max(state.last_updated_ms);
             updates.push(state.clone());
         }
     }
 
-    for article in articles {
-        if let Ok(payload) = serde_json::to_value(article) {
-            s.journal.append(JournalRecord {
-                event_id: Uuid::new_v4().to_string(),
-                received_at_ms: now,
-                kind: "news".to_string(),
-                symbol: article.ticker.clone(),
-                provider: Some(article.provider.clone()),
-                venue: article.source.clone(),
-                sequence: None,
-                payload,
-            });
+    if !s.replay_mode {
+        for article in articles {
+            if let Ok(payload) = serde_json::to_value(article) {
+                s.journal.append(JournalRecord {
+                    event_id: Uuid::new_v4().to_string(),
+                    received_at_ms: now,
+                    kind: "news".to_string(),
+                    symbol: article.ticker.clone(),
+                    provider: Some(article.provider.clone()),
+                    venue: article.source.clone(),
+                    sequence: None,
+                    payload,
+                });
+            }
         }
     }
 
@@ -2138,22 +2144,24 @@ pub(crate) async fn ingest(
     };
     let Some(updated) = updated else { return; };
 
-    if let Ok(payload) = serde_json::to_value(&event) {
-        let kind = match &event {
-            MarketEvent::Quote { .. } => "quote",
-            MarketEvent::Trade { .. } => "trade",
-            MarketEvent::Reference { .. } => "reference",
-        };
-        s.journal.append(JournalRecord {
-            event_id: Uuid::new_v4().to_string(),
-            received_at_ms: now_ms(),
-            kind: kind.to_string(),
-            symbol: Some(symbol.clone()),
-            provider: Some(provider.as_str().to_string()),
-            venue: Some(venue),
-            sequence,
-            payload,
-        });
+    if !s.replay_mode {
+        if let Ok(payload) = serde_json::to_value(&event) {
+            let kind = match &event {
+                MarketEvent::Quote { .. } => "quote",
+                MarketEvent::Trade { .. } => "trade",
+                MarketEvent::Reference { .. } => "reference",
+            };
+            s.journal.append(JournalRecord {
+                event_id: Uuid::new_v4().to_string(),
+                received_at_ms: now_ms(),
+                kind: kind.to_string(),
+                symbol: Some(symbol.clone()),
+                provider: Some(provider.as_str().to_string()),
+                venue: Some(venue),
+                sequence,
+                payload,
+            });
+        }
     }
 
     publish_market_state(s, updated).await;
