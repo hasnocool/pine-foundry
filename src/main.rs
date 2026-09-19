@@ -744,6 +744,99 @@ async fn ingest(s: &AppState, event: MarketEvent) {
     }
 }
 
+async fn live_feed(s: AppState) {
+    let provider = s.providers.clone();
+    let poll_secs = env::var("PINE_FOUNDRY_POLL_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(5)
+        .max(1);
+    let page_size = env::var("PINE_FOUNDRY_TV_PAGE_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(5_000)
+        .clamp(100, 10_000);
+    let max_rows = env::var("PINE_FOUNDRY_TV_MAX_ROWS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(20_000)
+        .min(50_000);
+    let mut interval = time::interval(Duration::from_secs(poll_secs));
+
+    loop {
+        interval.tick().await;
+        let mut delivered = 0usize;
+        let mut start = 0usize;
+
+        while start < max_rows {
+            let end = (start + page_size).min(max_rows);
+            match provider.tradingview_scan_us(start, end).await {
+                Ok(quotes) => {
+                    let count = quotes.len();
+                    for quote in quotes {
+                        ingest_public_quote(&s, quote).await;
+                    }
+                    delivered += count;
+                    if count < page_size {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+            start += page_size;
+        }
+
+        if delivered == 0 {
+            let symbols: Vec<String> = {
+                let market = s.market.read().await;
+                market.keys().take(100).cloned().collect()
+            };
+
+            match provider.yahoo_spark(&symbols).await {
+                Ok(quotes) if !quotes.is_empty() => {
+                    delivered = quotes.len();
+                    for quote in quotes {
+                        ingest_public_quote(&s, quote).await;
+                    }
+                }
+                _ => {
+                    let results = futures_util::stream::iter(symbols)
+                        .map(|symbol| {
+                            let provider = provider.clone();
+                            async move {
+                                provider.nasdaq_quote(&symbol).await.ok().flatten()
+                            }
+                        })
+                        .buffer_unordered(8)
+                        .collect::<Vec<_>>()
+                        .await;
+                    for quote in results.into_iter().flatten() {
+                        ingest_public_quote(&s, quote).await;
+                        delivered += 1;
+                    }
+                }
+            }
+        }
+
+        if delivered == 0 {
+            eprintln!("live feed: all public providers failed this cycle; retaining last state");
+        }
+    }
+}
+
+fn configured_live_session() -> MarketSession {
+    match env::var("PINE_FOUNDRY_SESSION")
+        .unwrap_or_else(|_| "regular".into())
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "pre" | "premarket" | "pre_market" => MarketSession::PreMarket,
+        "after" | "afterhours" | "after_hours" => MarketSession::AfterHours,
+        "closed" => MarketSession::Closed,
+        _ => MarketSession::Regular,
+    }
+}
+
 fn seed_market() -> HashMap<String, SecurityState> {
     let now = now_ms();
     let specs = [
@@ -818,14 +911,18 @@ async fn shutdown_signal() {
 async fn run_server() {
     let address = env::var("PINE_FOUNDRY_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
     let data_dir = PathBuf::from(env::var("PINE_FOUNDRY_DATA_DIR").unwrap_or_else(|_| "data".into()));
+    let provider = Arc::new(PublicProviderRouter::new().expect("public provider client"));
     let state = AppState {
         market: Arc::new(RwLock::new(seed_market())),
         scans: Arc::new(RwLock::new(HashMap::new())),
         presets: Arc::new(PresetStore::load(data_dir.join("presets.json")).await),
+        providers: provider,
     };
 
     let app = Router::new()
         .route("/health", get(health))
+        .route("/api/providers", get(provider_routes))
+        .route("/api/providers/health", get(provider_health))
         .route("/api/presets", get(list_presets).post(create_preset))
         .route("/api/presets/:id", delete(delete_preset))
         .route("/api/scans", get(list_scans).post(create_scan))
@@ -836,7 +933,14 @@ async fn run_server() {
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
-    tokio::spawn(mock_feed(state.clone()));
+    match env::var("PINE_FOUNDRY_FEED").unwrap_or_else(|_| "auto".into()).to_ascii_lowercase().as_str() {
+        "mock" => {
+            tokio::spawn(mock_feed(state.clone()));
+        }
+        _ => {
+            tokio::spawn(live_feed(state.clone()));
+        }
+    }
     let addr: SocketAddr = address.parse().expect("PINE_FOUNDRY_ADDR must be host:port");
     println!("Pine Foundry listening on http://{addr}");
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
@@ -844,7 +948,15 @@ async fn run_server() {
 }
 
 fn print_presets() {
-    for p in builtin_presets() { println!("{}\t{}", p.name, p.id); }
+    for p in builtin_presets() {
+        println!("{}\t{}", p.name, p.id);
+    }
+}
+
+fn print_providers() {
+    for route in PublicProviderRouter::routes() {
+        println!("{:?}\t{}\t{}", route.provider, route.route, route.purpose);
+    }
 }
 
 #[tokio::main]
@@ -852,6 +964,7 @@ async fn main() {
     match Cli::parse().command.unwrap_or(Command::Serve) {
         Command::Serve => run_server().await,
         Command::Presets => print_presets(),
+        Command::Providers => print_providers(),
     }
 }
 
