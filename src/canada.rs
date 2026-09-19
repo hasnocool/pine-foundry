@@ -46,18 +46,36 @@ impl CanadianDisclosureRouter {
 
     pub async fn refresh_configured(&self) -> Vec<NewsArticle> {
         let tickers = env::var("PINE_FOUNDRY_CANADA_TICKERS").unwrap_or_default().split(',').map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned).collect::<Vec<_>>();
-        let worker = stream::iter(tickers).map(|ticker| { let router=self.clone(); async move { router.search_ticker(&ticker, 25).await } }).buffer_unordered(2);
-        worker.for_each(|result| async {
+        let mut worker = stream::iter(tickers)
+            .map(|ticker| {
+                let router = self.clone();
+                async move { router.search_ticker(&ticker, 25).await }
+            })
+            .buffer_unordered(2);
+
+        let mut collected = Vec::new();
+        while let Some(result) = worker.next().await {
             match result {
-                Ok(articles) => for article in articles {
-                    if let Ok(payload)=serde_json::to_value(&article) { self.journal.append(JournalRecord {
-                        event_id: Uuid::new_v4().to_string(), received_at_ms: now_ms(), kind:"canada_disclosure".to_string(),
-                        symbol:article.ticker.clone(), provider:Some("canada_disclosure".to_string()), venue:article.source.clone(), sequence:None, payload
-                    }); }
-                },
+                Ok(mut articles) => collected.append(&mut articles),
                 Err(error) => eprintln!("Canadian disclosure feed: {error}"),
             }
-        }).await;
+        }
+
+        for article in &collected {
+            if let Ok(payload) = serde_json::to_value(article) {
+                self.journal.append(JournalRecord {
+                    event_id: Uuid::new_v4().to_string(),
+                    received_at_ms: now_ms(),
+                    kind: "canada_disclosure".to_string(),
+                    symbol: article.ticker.clone(),
+                    provider: Some("canada_disclosure".to_string()),
+                    venue: article.source.clone(),
+                    sequence: None,
+                    payload,
+                });
+            }
+        }
+        collected
     }
 }
 
