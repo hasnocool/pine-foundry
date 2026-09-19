@@ -983,6 +983,15 @@ impl ScanRuntime {
 }
 
 #[derive(Debug, Serialize)]
+struct JournalHealth {
+    queue_dropped: u64,
+}
+
+async fn journal_health(State(s): State<AppState>) -> Json<JournalHealth> {
+    Json(JournalHealth { queue_dropped: s.journal.dropped() })
+}
+
+#[derive(Debug, Serialize)]
 struct Health {
     ok: bool,
     service: &'static str,
@@ -2116,6 +2125,7 @@ async fn run_server() {
         .route("/api/providers", get(provider_routes))
         .route("/api/providers/health", get(provider_health))
         .route("/api/streams/health", get(stream_health))
+        .route("/api/journal/health", get(journal_health))
         .route("/api/evidence/:symbol", get(symbol_evidence))
         .route("/api/filings/health", get(filing_health))
         .route("/api/filings/:ticker", get(filing_search))
