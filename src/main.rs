@@ -581,7 +581,97 @@ async fn provider_routes() -> Json<Vec<providers::PublicProviderRoute>> {
     Json(PublicProviderRouter::routes())
 }
 
-async fn list_presets(State(s): State<AppState>) -> Json<Vec<Preset>> { Json(s.presets.list().await) }
+
+async fn api_yahoo_quote(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<Option<PublicQuote>>, (StatusCode, String)> {
+    s.providers
+        .yahoo_chart(&symbol)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_nasdaq_quote(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<Option<PublicQuote>>, (StatusCode, String)> {
+    s.providers
+        .nasdaq_quote(&symbol)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_nasdaq_info(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    s.providers
+        .nasdaq_info(&symbol)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_tradingview_symbol(
+    State(s): State<AppState>,
+    Path((exchange, symbol)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let fields = [
+        "close",
+        "change",
+        "change_abs",
+        "volume",
+        "market_cap_basic",
+        "float_shares_outstanding",
+        "relative_volume_10d_calc",
+        "RSI",
+        "Recommend.All",
+        "Recommend.MA",
+    ];
+    let exchange_symbol = format!("{exchange}:{symbol}");
+    s.providers
+        .tradingview_symbol(&exchange_symbol, &fields)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_binance_ticker(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    s.providers
+        .binance_24h(&symbol)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_binance_klines(
+    State(s): State<AppState>,
+    Path((symbol, interval)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    s.providers
+        .binance_klines(&symbol, &interval, 500)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_binance_depth(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    s.providers
+        .binance_depth(&symbol, 1000)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+\nasync fn list_presets(State(s): State<AppState>) -> Json<Vec<Preset>> { Json(s.presets.list().await) }
 
 async fn create_preset(State(s): State<AppState>, Json(p): Json<Preset>) -> Result<Json<Preset>, (StatusCode, String)> {
     s.presets.create(p).await.map(Json).map_err(internal_error)
@@ -923,6 +1013,13 @@ async fn run_server() {
         .route("/health", get(health))
         .route("/api/providers", get(provider_routes))
         .route("/api/providers/health", get(provider_health))
+        .route("/api/providers/yahoo/:symbol", get(api_yahoo_quote))
+        .route("/api/providers/nasdaq/:symbol", get(api_nasdaq_quote))
+        .route("/api/providers/nasdaq/:symbol/info", get(api_nasdaq_info))
+        .route("/api/providers/tradingview/:exchange/:symbol", get(api_tradingview_symbol))
+        .route("/api/providers/binance/:symbol/ticker", get(api_binance_ticker))
+        .route("/api/providers/binance/:symbol/klines/:interval", get(api_binance_klines))
+        .route("/api/providers/binance/:symbol/depth", get(api_binance_depth))
         .route("/api/presets", get(list_presets).post(create_preset))
         .route("/api/presets/:id", delete(delete_preset))
         .route("/api/scans", get(list_scans).post(create_scan))
