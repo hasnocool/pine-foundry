@@ -854,7 +854,8 @@ async fn api_binance_depth(
         .map(Json)
         .map_err(internal_error)
 }
-\nasync fn list_presets(State(s): State<AppState>) -> Json<Vec<Preset>> { Json(s.presets.list().await) }
+
+async fn list_presets(State(s): State<AppState>) -> Json<Vec<Preset>> { Json(s.presets.list().await) }
 
 async fn create_preset(State(s): State<AppState>, Json(p): Json<Preset>) -> Result<Json<Preset>, (StatusCode, String)> {
     s.presets.create(p).await.map(Json).map_err(internal_error)
@@ -973,7 +974,19 @@ async fn ingest_public_quote(s: &AppState, quote: PublicQuote) {
             .or_insert_with(|| SecurityState::blank(&quote.symbol, quote.price, session, quote.ts_ms));
         let old_volume = state.day_volume;
         state.last_price = quote.price;
-        state.issue_type = match quote.issue_type {\n            "common_stock" => IssueType::CommonStock,\n            "etf" => IssueType::Etf,\n            "adr" => IssueType::Adr,\n            "reit" => IssueType::Reit,\n            "etn" => IssueType::Etn,\n            "warrant" => IssueType::Warrant,\n            "preferred" => IssueType::Preferred,\n            "right" => IssueType::Right,\n            "unit" => IssueType::Unit,\n            _ => IssueType::Other,\n        };\n        state.previous_close = quote.previous_close.or(state.previous_close);
+        state.issue_type = match quote.issue_type {
+            "common_stock" => IssueType::CommonStock,
+            "etf" => IssueType::Etf,
+            "adr" => IssueType::Adr,
+            "reit" => IssueType::Reit,
+            "etn" => IssueType::Etn,
+            "warrant" => IssueType::Warrant,
+            "preferred" => IssueType::Preferred,
+            "right" => IssueType::Right,
+            "unit" => IssueType::Unit,
+            _ => IssueType::Other,
+        };
+        state.previous_close = quote.previous_close.or(state.previous_close);
         state.shares_float = quote.shares_float.or(state.shares_float);
         state.shares_outstanding = quote.shares_outstanding.or(state.shares_outstanding);
         state.market_cap = quote.market_cap.or(state.market_cap);
@@ -1289,7 +1302,14 @@ async fn run_server() {
         .route("/api/providers/frankfurter/:base/rates/:quotes", get(api_frankfurter_rates))
         .route("/api/providers/bank-of-canada/:base/:quote", get(api_bank_of_canada_fx))
         .route("/api/providers/bank-of-canada/series/:series", get(api_bank_of_canada_series))
-        .route("/api/news/search", get(api_news_search))\n        .route("/api/news/ticker/:ticker", get(api_news_ticker))\n        .route("/api/news/reddit", get(api_news_reddit))\n        .route("/api/news/google", get(api_news_google))\n        .route("/api/news/newsapi", get(api_news_newsapi))\n        .route("/api/news/cache", get(api_news_cache))\n        .route("/api/news/health", get(api_news_health))\n        .route("/api/presets", get(list_presets).post(create_preset))
+        .route("/api/news/search", get(api_news_search))
+        .route("/api/news/ticker/:ticker", get(api_news_ticker))
+        .route("/api/news/reddit", get(api_news_reddit))
+        .route("/api/news/google", get(api_news_google))
+        .route("/api/news/newsapi", get(api_news_newsapi))
+        .route("/api/news/cache", get(api_news_cache))
+        .route("/api/news/health", get(api_news_health))
+        .route("/api/presets", get(list_presets).post(create_preset))
         .route("/api/presets/:id", delete(delete_preset))
         .route("/api/scans", get(list_scans).post(create_scan))
         .route("/api/scans/:id", put(update_scan).delete(delete_scan))
