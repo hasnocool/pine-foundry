@@ -1,6 +1,6 @@
-# News ingestion
+# News and catalyst ingestion
 
-Pine Foundry treats news as a side-channel around the market-event engine rather than putting HTTP news calls in the market-data hot path.
+Pine Foundry treats news as a side-channel around the market-event engine and turns fresh stories into deterministic CatalystEvent records.
 
 ## Sources
 
@@ -13,78 +13,151 @@ Pine Foundry treats news as a side-channel around the market-event engine rather
 4. NewsAPI Everything
    - https://newsapi.org/v2/everything
 
-Every source is normalized into NewsArticle.
+Additional regulatory/disclosure sources:
+- SEC EDGAR submissions
+- Canadian public disclosure discovery restricted to SEDAR+ and TSX domains through Google News RSS
 
-## Ticker searches
+## Search model
 
-GET /api/news/ticker/:ticker builds a broad query from the ticker. Known crypto tickers add common asset-name aliases such as Bitcoin, Ethereum and Solana.
-
-Example:
-
-~~~text
-/api/news/ticker/BTC
-~~~
-
-For a stock ticker or unknown symbol, Pine Foundry searches both the dollar-prefixed symbol and plain symbol.
-
-Free-form searches can be supplied with:
+Ticker searches expand known assets:
 
 ~~~text
-/api/news/search?q=quantum%20computing&ticker=XYZ&limit=25
+BTC -> $BTC OR BTC OR Bitcoin
+ETH -> $ETH OR ETH OR Ethereum
+SOL -> $SOL OR SOL OR Solana
 ~~~
 
-## NewsAPI credential
+Unknown symbols search both dollar-prefixed and plain forms.
 
-Set either:
+Free-form searches use:
 
 ~~~text
-NEWSAPI=...
+/api/news/search?q=quantum%20computing&limit=25
 ~~~
 
-or:
+The browser UI chooses ticker expansion for ticker-like strings and broad search for normal phrases.
+
+## NewsAPI guard
+
+NEWSAPI or NEWSAPI_KEY is accepted from the process environment.
+
+Local guards:
 
 ~~~text
-NEWSAPI_KEY=...
+PINE_FOUNDRY_NEWSAPI_MIN_INTERVAL_SECS=1800
+PINE_FOUNDRY_NEWSAPI_DAILY_LIMIT=90
 ~~~
 
-Pine Foundry sends the credential through X-Api-Key rather than putting it into the URL. Credentials are excluded from source control by .gitignore.
+The guard is process-local and intentionally conservative so a large ticker universe cannot consume the API allowance on every polling loop.
 
-## Freshness
+## Fresh-story processing
 
-NewsAPI requests include a configurable from timestamp:
+Background polling keeps a process-level seen set so the same URL is not repeatedly converted into CatalystEvent records.
+
+Each fresh article is:
+1. normalized
+2. classified
+3. assigned a story-cluster ID
+4. journaled
+5. attached to the related SecurityState when its ticker exists
+
+## Catalyst classification
+
+The deterministic classifier recognizes:
 
 ~~~text
-PINE_FOUNDRY_NEWS_LOOKBACK_HOURS=24
+m_and_a
+earnings
+guidance
+offering
+buyback
+dividend
+fda_or_clinical
+legal_or_regulatory
+bankruptcy
+management
+contract_or_partnership
+security_incident
+etf
+macro
+general
 ~~~
 
-Reddit and Google News queries request newest-first feeds. Results are normalized, deduplicated by URL and sorted newest first.
+This classification is intentionally cheap and explainable. LLM enrichment belongs downstream.
 
-## Automatic worker
+## Story clustering
 
-The default automatic worker refreshes:
+Headlines are normalized into important tokens, sorted and hashed into a stable cluster ID.
+
+Each StoryCluster retains:
+- canonical title
+- first/last seen
+- article count
+- source count/list
+- ticker count/list
+- event type
+
+The cluster cache is bounded.
+
+## News velocity
+
+SecurityState maintains one-hour news history and computes:
+- article count in 5m
+- article count in 15m
+- relative news velocity
+- unique source count in 15m
+
+These are scanner fields and can be filtered/sorted.
+
+## Canadian disclosure discovery
+
+The Canadian adapter uses public Google News RSS with:
 
 ~~~text
-PINE_FOUNDRY_NEWS_TICKERS=BTC,ETH,SOL
-PINE_FOUNDRY_NEWS_QUERIES=
-PINE_FOUNDRY_NEWS_POLL_SECS=60
-PINE_FOUNDRY_NEWS_LIMIT=25
-PINE_FOUNDRY_NEWS_CONCURRENCY=4
+site:sedarplus.ca
+site:sedarplus.ca/csa-party
+site:tsx.com/en/news
 ~~~
 
-Use PINE_FOUNDRY_NEWS_QUERIES for additional broad monitoring phrases. Search jobs are concurrency-limited so an aggressive ticker list does not overwhelm providers.
-
-## Cache
-
-Recent normalized articles are retained in an in-memory bounded cache:
+Configured tickers:
 
 ~~~text
-PINE_FOUNDRY_NEWS_CACHE_SIZE=500
+PINE_FOUNDRY_CANADA_TICKERS=SHOP,RY,ABX
+PINE_FOUNDRY_CANADA_POLL_SECS=300
 ~~~
 
-The cache is deliberately volatile. It is not a durable historical news database yet.
+The adapter intentionally does not depend on undocumented SEDAR+ internal JSON endpoints.
 
-## Failure behavior
+## SEC filings
 
-Unified search attempts all sources. Individual provider failures are recorded in /api/news/health and do not suppress results from working providers.
+SEC configuration:
 
-Reddit RSS is retained as a keyless fallback when anonymous JSON access is unavailable. Public feeds can still be throttled, so the automatic worker defaults to a 60-second cadence rather than tight polling.
+~~~text
+PINE_FOUNDRY_SEC_TICKERS=AAPL,MSFT
+PINE_FOUNDRY_SEC_POLL_SECS=30
+PINE_FOUNDRY_SEC_USER_AGENT=PineFoundry/0.4 research
+~~~
+
+Filing records are normalized into FilingEvent and classified by form, then added to the symbol catalyst history.
+
+## API surfaces
+
+~~~text
+GET /api/news/search?q=...
+GET /api/news/ticker/:ticker
+GET /api/news/cache
+GET /api/news/clusters
+GET /api/news/health
+GET /api/filings/:ticker
+GET /api/canada/disclosures/:ticker
+GET /api/catalysts/:ticker
+GET /api/evidence/:ticker
+~~~
+
+## Replay
+
+News, Canadian disclosures and SEC filings are written into the event journal and replayed through the same state/catalyst engine.
+
+~~~text
+cargo run -- replay YYYY-MM-DD
+~~~
