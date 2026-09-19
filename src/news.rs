@@ -359,10 +359,13 @@ impl NewsRouter {
 
         let new_articles = {
             let mut cache = self.cache.write().await;
-            let mut seen = cache.iter().map(|item| item.id.clone()).collect::<HashSet<_>>();
+            let mut seen = cache
+                .iter()
+                .map(canonical_article_key)
+                .collect::<HashSet<_>>();
             let mut new_articles = Vec::new();
             for article in articles {
-                if seen.insert(article.id.clone()) {
+                if seen.insert(canonical_article_key(article)) {
                     cache.push(article.clone());
                     new_articles.push(article.clone());
                 }
@@ -833,6 +836,12 @@ fn parse_date_ms(value: &str) -> Option<i64> {
         .ok()
 }
 
+fn canonical_article_key(article: &NewsArticle) -> String {
+    let url = article.url.trim().to_ascii_lowercase();
+    if !url.is_empty() { return url; }
+    article.title.trim().to_ascii_lowercase()
+}
+
 fn dedupe_and_sort(mut articles: Vec<NewsArticle>) -> Vec<NewsArticle> {
     for article in &mut articles {
         article.event_type = classify_catalyst(&article.title, article.description.as_deref());
@@ -877,13 +886,25 @@ fn classify_catalyst(title: &str, description: Option<&str>) -> String {
 }
 
 fn cluster_key(title: &str) -> String {
-    title
-        .to_ascii_lowercase()
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
-        .filter(|ch| *ch != ' ')
-        .take(180)
-        .collect()
+    const STOP: &[&str] = &[
+        "the", "a", "an", "of", "to", "for", "and", "or", "on", "in",
+        "with", "by", "from", "inc", "corp", "ltd", "company", "shares",
+    ];
+    let mut tokens = title
+        .split_whitespace()
+        .map(|token| {
+            token
+                .chars()
+                .filter(|ch| ch.is_ascii_alphanumeric())
+                .collect::<String>()
+                .to_ascii_lowercase()
+        })
+        .filter(|token| token.len() >= 3 && !STOP.contains(&token.as_str()))
+        .collect::<Vec<_>>();
+    tokens.sort();
+    tokens.dedup();
+    tokens.truncate(16);
+    tokens.join("|")
 }
 
 fn cluster_id_for(title: &str) -> String {
