@@ -2096,17 +2096,15 @@ async fn run_replay(date: String) {
     };
 
     let journal = Arc::new(EventJournal::spawn(data_dir.join("replay-events")));
+    let replay_news = Arc::new(NewsRouter::new().expect("replay news client"));
     let state = AppState {
         market: Arc::new(RwLock::new(seed_market())),
         scans: Arc::new(RwLock::new(HashMap::new())),
         presets: Arc::new(PresetStore::load(data_dir.join("replay-presets.json")).await),
         providers: Arc::new(PublicProviderRouter::new().expect("public provider client")),
-        news: Arc::new(NewsRouter::new().expect("public news client")),
+        news: replay_news.clone(),
         filings: Arc::new(SecFilingRouter::new(journal.clone()).expect("SEC client")),
-        canada: Arc::new(CanadianDisclosureRouter::new(
-            Arc::new(NewsRouter::new().expect("replay news client")),
-            journal.clone(),
-        )),
+        canada: Arc::new(CanadianDisclosureRouter::new(replay_news, journal.clone())),
         journal,
         streams: Arc::new(streams::StreamHealthStore::new()),
     };
@@ -2158,12 +2156,16 @@ async fn run_replay(date: String) {
                 )
                 .await;
             }
-            "news" => {
+            "news" | "canada_disclosure" => {
                 if let Ok(article) = serde_json::from_value::<NewsArticle>(record.payload) {
                     ingest_news_articles(&state, &[article]).await;
                 }
             }
-            "filing" => {}
+            "filing" => {
+                if let Ok(filing) = serde_json::from_value::<FilingEvent>(record.payload) {
+                    ingest_filing_events(&state, &[filing]).await;
+                }
+            }
             _ => {}
         }
     }
