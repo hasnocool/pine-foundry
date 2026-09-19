@@ -28,9 +28,11 @@ pub struct StreamHealth {
     pub last_message_ms: Option<i64>,
     pub last_trade_ms: Option<i64>,
     pub last_book_ms: Option<i64>,
-    pub last_sequence: Option<u64>,
+    pub last_trade_sequence: Option<u64>,
+    pub last_book_sequence: Option<u64>,
     pub reconnects: u64,
-    pub sequence_gap_count: u64,
+    pub trade_sequence_gap_count: u64,
+    pub book_sequence_gap_count: u64,
     pub last_error: Option<String>,
 }
 
@@ -52,9 +54,11 @@ impl StreamHealthStore {
                     last_message_ms: None,
                     last_trade_ms: None,
                     last_book_ms: None,
-                    last_sequence: None,
+                    last_trade_sequence: None,
+                    last_book_sequence: None,
                     reconnects: 0,
-                    sequence_gap_count: 0,
+                    trade_sequence_gap_count: 0,
+                    book_sequence_gap_count: 0,
                     last_error: None,
                 },
             );
@@ -93,7 +97,7 @@ impl StreamHealthStore {
         if let Some(item) = map.get_mut(name) {
             item.last_trade_ms = Some(ts_ms);
             item.last_message_ms = Some(now_ms());
-            update_sequence(item, sequence);
+            update_sequence(&mut item.last_trade_sequence, &mut item.trade_sequence_gap_count, sequence);
         }
     }
 
@@ -102,7 +106,7 @@ impl StreamHealthStore {
         if let Some(item) = map.get_mut(name) {
             item.last_book_ms = Some(ts_ms);
             item.last_message_ms = Some(now_ms());
-            update_sequence(item, sequence);
+            update_sequence(&mut item.last_book_sequence, &mut item.book_sequence_gap_count, sequence);
         }
     }
 
@@ -126,15 +130,19 @@ impl StreamHealthStore {
     }
 }
 
-fn update_sequence(item: &mut StreamHealth, sequence: Option<u64>) {
+fn update_sequence(
+    last_sequence: &mut Option<u64>,
+    gap_count: &mut u64,
+    sequence: Option<u64>,
+) {
     if let Some(current) = sequence {
-        if let Some(previous) = item.last_sequence {
+        if let Some(previous) = *last_sequence {
             if current <= previous || current > previous.saturating_add(1) {
-                item.sequence_gap_count = item.sequence_gap_count.saturating_add(1);
+                *gap_count = gap_count.saturating_add(1);
             }
         }
-        if item.last_sequence.map(|previous| current > previous).unwrap_or(true) {
-            item.last_sequence = Some(current);
+        if last_sequence.map(|previous| current > previous).unwrap_or(true) {
+            *last_sequence = Some(current);
         }
     }
 }
