@@ -261,7 +261,7 @@ impl SecFilingRouter {
     }
 }
 
-pub async fn run_sec_feed(router: Arc<SecFilingRouter>) {
+pub async fn run_sec_feed(router: Arc<SecFilingRouter>, state: crate::AppState) {
     let poll_secs = env::var("PINE_FOUNDRY_SEC_POLL_SECS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -269,7 +269,8 @@ pub async fn run_sec_feed(router: Arc<SecFilingRouter>) {
         .clamp(15, 3600);
 
     loop {
-        router.refresh_configured().await;
+        let filings = router.refresh_configured().await;
+        crate::ingest_filing_events(&state, &filings).await;
         sleep(Duration::from_secs(poll_secs)).await;
     }
 }
