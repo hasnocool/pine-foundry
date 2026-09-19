@@ -118,7 +118,7 @@ PINE_FOUNDRY_CANADA_TICKERS=
 PINE_FOUNDRY_CANADA_POLL_SECS=300
 ~~~
 
-NEWSAPI is read only from the runtime environment and is sent with X-Api-Key. The credential is not committed to the repository.
+NEWSAPI is loaded from the local .env file or runtime environment and is sent with X-Api-Key. The credential is not committed to the repository.
 
 ## Event fabric
 
