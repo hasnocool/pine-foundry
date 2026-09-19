@@ -101,12 +101,23 @@ impl StreamHealthStore {
         }
     }
 
-    async fn book(&self, name: &str, ts_ms: i64, sequence: Option<u64>) {
+    async fn book(
+        &self,
+        name: &str,
+        ts_ms: i64,
+        first_sequence: Option<u64>,
+        last_sequence: Option<u64>,
+    ) {
         let mut map = self.inner.write().await;
         if let Some(item) = map.get_mut(name) {
             item.last_book_ms = Some(ts_ms);
             item.last_message_ms = Some(now_ms());
-            update_sequence(&mut item.last_book_sequence, &mut item.book_sequence_gap_count, sequence);
+            update_sequence_range(
+                &mut item.last_book_sequence,
+                &mut item.book_sequence_gap_count,
+                first_sequence,
+                last_sequence,
+            );
         }
     }
 
@@ -138,12 +149,38 @@ fn update_sequence(
     if let Some(current) = sequence {
         if let Some(previous) = *last_sequence {
             if current <= previous || current > previous.saturating_add(1) {
-                *gap_count = gap_count.saturating_add(1);
+                *gap_count = (*gap_count).saturating_add(1);
             }
         }
         if last_sequence.map(|previous| current > previous).unwrap_or(true) {
             *last_sequence = Some(current);
         }
+    }
+}
+
+fn update_sequence_range(
+    last_sequence: &mut Option<u64>,
+    gap_count: &mut u64,
+    first_sequence: Option<u64>,
+    last: Option<u64>,
+) {
+    let (Some(first), Some(current)) = (first_sequence, last) else {
+        return;
+    };
+    if current < first {
+        *gap_count = (*gap_count).saturating_add(1);
+        return;
+    }
+    if let Some(previous) = *last_sequence {
+        if current <= previous {
+            return;
+        }
+        if first > previous.saturating_add(1) {
+            *gap_count = (*gap_count).saturating_add(1);
+        }
+    }
+    if last_sequence.map(|previous| current > previous).unwrap_or(true) {
+        *last_sequence = Some(current);
     }
 }
 
@@ -484,7 +521,7 @@ async fn run_binance(state: AppState) {
                                 let ts_ms = data.get("E").and_then(Value::as_i64).unwrap_or_else(now_ms);
                                 let bids = parse_levels(data.get("b").or_else(|| data.get("bids")));
                                 let asks = parse_levels(data.get("a").or_else(|| data.get("asks")));
-                                state.streams.book("binance", ts_ms, sequence).await;
+                                state.streams.book("binance", ts_ms, first_sequence, sequence).await;
                                 let accepted = ingest_book(
                                     &state,
                                     symbol.clone(),
@@ -645,7 +682,7 @@ async fn run_kraken(state: AppState) {
                                     let ts_ms = timestamp_ms(book.get("timestamp"));
                                     let bids = parse_object_levels(book.get("bids"), "price", "qty");
                                     let asks = parse_object_levels(book.get("asks"), "price", "qty");
-                                    state.streams.book("kraken", ts_ms, None).await;
+                                    state.streams.book("kraken", ts_ms, None, None).await;
                                     let accepted = ingest_book(
                                         &state,
                                         symbol.clone(),
@@ -826,7 +863,7 @@ async fn run_coinbase(state: AppState) {
                                             }
                                         }
                                         let ts_ms = timestamp_ms(event.get("event_time"));
-                                        state.streams.book("coinbase", ts_ms, None).await;
+                                        state.streams.book("coinbase", ts_ms, None, None).await;
                                         let accepted = ingest_book(
                                             &state,
                                             symbol.clone(),
