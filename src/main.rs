@@ -866,7 +866,9 @@ struct Health {
     service: &'static str,
     feed_mode: String,
     providers: Vec<ProviderHealth>,
+    streams: Vec<streams::StreamHealth>,
     news: Vec<NewsProviderHealth>,
+    filings: FilingHealth,
 }
 
 async fn health(State(s): State<AppState>) -> Json<Health> {
@@ -875,12 +877,33 @@ async fn health(State(s): State<AppState>) -> Json<Health> {
         service: "pine-foundry",
         feed_mode: env::var("PINE_FOUNDRY_FEED").unwrap_or_else(|_| "auto".into()),
         providers: s.providers.health().await,
+        streams: s.streams.health().await,
         news: s.news.health().await,
+        filings: s.filings.health().await,
     })
 }
 
 async fn provider_health(State(s): State<AppState>) -> Json<Vec<ProviderHealth>> {
     Json(s.providers.health().await)
+}
+
+async fn stream_health(State(s): State<AppState>) -> Json<Vec<streams::StreamHealth>> {
+    Json(s.streams.health().await)
+}
+
+async fn filing_health(State(s): State<AppState>) -> Json<FilingHealth> {
+    Json(s.filings.health().await)
+}
+
+async fn filing_search(
+    State(s): State<AppState>,
+    Path(ticker): Path<String>,
+) -> Result<Json<Vec<FilingEvent>>, (StatusCode, String)> {
+    s.filings
+        .search_ticker(&ticker)
+        .await
+        .map(Json)
+        .map_err(internal_error)
 }
 
 async fn provider_routes() -> Json<Vec<providers::PublicProviderRoute>> {
@@ -1737,9 +1760,16 @@ async fn mock_feed(s: AppState) {
             let direction = if i % 5 == 0 { 0.014 } else if i % 5 == 1 { -0.006 } else { 0.003 };
             let price = (base * (1.0 + wave * 0.02 + direction * tick as f64 / 2500.0)).max(0.25);
             let size = 20_000.0 + ((tick + i as u64 * 17) % 16) as f64 * 2_500.0;
-            ingest(&s, MarketEvent::Trade {
-                symbol: symbol.clone(), ts_ms: ts, price, size, session: MarketSession::Regular,
-            }).await;
+            ingest(
+                &s,
+                MarketEvent::Trade {
+                    symbol: symbol.clone(), ts_ms: ts, price, size, session: MarketSession::Regular,
+                },
+                providers::ProviderId::TradingView,
+                "Mock".to_string(),
+                Some(tick),
+                if direction >= 0.0 { Some(streams::TradeSide::Buy) } else { Some(streams::TradeSide::Sell) },
+            ).await;
         }
     }
 }
@@ -1765,19 +1795,28 @@ async fn run_server() {
     let address = env::var("PINE_FOUNDRY_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
     let data_dir = PathBuf::from(env::var("PINE_FOUNDRY_DATA_DIR").unwrap_or_else(|_| "data".into()));
     let provider = Arc::new(PublicProviderRouter::new().expect("public provider client"));
+    let journal = Arc::new(EventJournal::spawn(data_dir.join("events")));
     let news = Arc::new(NewsRouter::new().expect("public news client"));
+    let filings = Arc::new(SecFilingRouter::new(journal.clone()).expect("SEC client"));
+    let stream_health = Arc::new(streams::StreamHealthStore::new());
     let state = AppState {
         market: Arc::new(RwLock::new(seed_market())),
         scans: Arc::new(RwLock::new(HashMap::new())),
         presets: Arc::new(PresetStore::load(data_dir.join("presets.json")).await),
         providers: provider,
         news,
+        filings,
+        journal,
+        streams: stream_health,
     };
 
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/providers", get(provider_routes))
         .route("/api/providers/health", get(provider_health))
+        .route("/api/streams/health", get(stream_health))
+        .route("/api/filings/health", get(filing_health))
+        .route("/api/filings/:ticker", get(filing_search))
         .route("/api/providers/yahoo/:symbol", get(api_yahoo_quote))
         .route("/api/providers/yahoo/fx/:symbol", get(api_yahoo_fx))
         .route("/api/providers/tradingview/canada/:start/:end", get(api_tradingview_canada))
