@@ -5,8 +5,11 @@ type Field =
   | "price" | "change" | "change_pct_prev_close" | "change_pct_1m"
   | "change_pct_5m" | "change_pct_15m" | "day_volume" | "volume_1m"
   | "shares_float" | "shares_outstanding" | "market_cap" | "issue_type"
-  | "spread_bps" | "book_imbalance" | "liquidity_score" | "trade_imbalance"
-  | "cvd" | "cross_venue_dislocation_bps" | "news_count_5m" | "news_count_15m"
+  | "spread_bps" | "best_bid" | "best_ask" | "mid_price" | "microprice"
+  | "bid_depth_5" | "ask_depth_5" | "bid_depth_10" | "ask_depth_10"
+  | "book_imbalance" | "liquidity_score" | "trade_imbalance"
+  | "cvd" | "trade_count_1m" | "trade_rate_1m" | "buy_volume_1m" | "sell_volume_1m" | "vwap_15m"
+  | "cross_venue_dislocation_bps" | "news_count_5m" | "news_count_15m"
   | "news_velocity" | "news_sources_15m" | "stream_age_ms" | "relative_volume_15m"
   | "volatility_15m_pct" | "executable_buy_1000" | "executable_sell_1000";
 type Filter = { field: Field; enabled: boolean; min: number | null; max: number | null; equals?: string | null };
@@ -33,10 +36,23 @@ type Row = {
   shares_outstanding: number | null;
   market_cap: number | null;
   spread_bps: number | null;
+  best_bid: number | null;
+  best_ask: number | null;
+  mid_price: number | null;
+  microprice: number | null;
+  bid_depth_5: number;
+  ask_depth_5: number;
+  bid_depth_10: number;
+  ask_depth_10: number;
   book_imbalance: number | null;
   liquidity_score: number;
   trade_imbalance: number | null;
   cvd: number;
+  trade_count_1m: number;
+  trade_rate_1m: number;
+  buy_volume_1m: number;
+  sell_volume_1m: number;
+  vwap_15m: number | null;
   cross_venue_dislocation_bps: number | null;
   news_count_5m: number;
   news_count_15m: number;
@@ -119,9 +135,13 @@ const labels: Record<Field, string> = {
   change_pct_1m: "Chg% (1m)", change_pct_5m: "Chg% (5m)", change_pct_15m: "Chg% (15m)",
   day_volume: "Day Volume", volume_1m: "Volume (1m)", shares_float: "Shares Float",
   shares_outstanding: "Shares Outstanding", market_cap: "Market Cap", issue_type: "Issue Type",
-  spread_bps: "Spread (bps)", book_imbalance: "Book Imbalance",
-  liquidity_score: "Liquidity", trade_imbalance: "Trade Imbalance",
-  cvd: "CVD", cross_venue_dislocation_bps: "Cross-Venue (bps)",
+  spread_bps: "Spread (bps)", best_bid: "Best Bid", best_ask: "Best Ask",
+  mid_price: "Mid", microprice: "Microprice", bid_depth_5: "Bid Depth (5)",
+  ask_depth_5: "Ask Depth (5)", bid_depth_10: "Bid Depth (10)", ask_depth_10: "Ask Depth (10)",
+  book_imbalance: "Book Imbalance", liquidity_score: "Liquidity", trade_imbalance: "Trade Imbalance",
+  cvd: "CVD", trade_count_1m: "Trades (1m)", trade_rate_1m: "Trade Rate (1m)",
+  buy_volume_1m: "Buy Volume (1m)", sell_volume_1m: "Sell Volume (1m)", vwap_15m: "VWAP (15m)",
+  cross_venue_dislocation_bps: "Cross-Venue (bps)",
   news_count_5m: "News (5m)", news_count_15m: "News (15m)",
   news_velocity: "News Velocity %", news_sources_15m: "News Sources (15m)",
   stream_age_ms: "Stream Age (ms)", relative_volume_15m: "Relative Volume (15m)",
@@ -196,8 +216,10 @@ function visibleRows() {
 function defaultColumns(): Column[] {
   return [
     "price","change","change_pct_5m","day_volume","volume_1m",
-    "shares_float","market_cap","spread_bps","book_imbalance",
-    "trade_imbalance","liquidity_score","relative_volume_15m","volatility_15m_pct",
+    "shares_float","market_cap","spread_bps","best_bid","best_ask","mid_price","microprice",
+    "bid_depth_5","ask_depth_5","book_imbalance","trade_imbalance",
+    "liquidity_score","trade_count_1m","trade_rate_1m","buy_volume_1m","sell_volume_1m","vwap_15m",
+    "relative_volume_15m","volatility_15m_pct",
     "executable_buy_1000","executable_sell_1000","news_count_5m","news_velocity",
     "news_sources_15m","stream_age_ms"
   ].map(field => ({ field: field as Field, width: 120, visible: true }));
