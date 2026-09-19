@@ -173,6 +173,13 @@ fn reconnect_secs() -> u64 {
         .clamp(1, 60)
 }
 
+fn reconnect_delay(attempt: u32) -> Duration {
+    let base = reconnect_secs().saturating_mul(1u64 << attempt.min(5));
+    let capped = base.min(60);
+    let jitter_ms = (now_ms().unsigned_abs() % 500) as u64;
+    Duration::from_millis(capped * 1000 + jitter_ms)
+}
+
 fn kraken_pair(symbol: &str) -> String {
     let upper = symbol.to_ascii_uppercase();
     if let Some(base) = upper.strip_suffix("USDT") {
@@ -420,10 +427,12 @@ async fn run_binance(state: AppState) {
         streams.join("/")
     );
 
+    let mut reconnect_attempts = 0u32;
     loop {
         eprintln!("crypto websocket: connecting Binance");
         match connect_async(&url).await {
             Ok((mut socket, _)) => {
+                reconnect_attempts = 0;
                 state.streams.connected("binance").await;
 
                 for symbol in &symbols {
@@ -522,7 +531,9 @@ async fn run_binance(state: AppState) {
             }
         }
 
-        sleep(Duration::from_secs(reconnect_secs())).await;
+        reconnect_attempts = reconnect_attempts.saturating_add(1);
+        reconnect_attempts = reconnect_attempts.saturating_add(1);
+        sleep(reconnect_delay(reconnect_attempts)).await;
     }
 }
 
@@ -545,10 +556,12 @@ async fn run_kraken(state: AppState) {
         .zip(symbols.iter().cloned())
         .collect::<HashMap<_, _>>();
 
+    let mut reconnect_attempts = 0u32;
     loop {
         eprintln!("crypto websocket: connecting Kraken");
         match connect_async("wss://ws.kraken.com/v2").await {
             Ok((mut socket, _)) => {
+                reconnect_attempts = 0;
                 state.streams.connected("kraken").await;
                 let trade_subscription = json!({
                     "method": "subscribe",
@@ -581,7 +594,7 @@ async fn run_kraken(state: AppState) {
                         .streams
                         .disconnected("kraken", Some("subscription send failed".to_string()))
                         .await;
-                    sleep(Duration::from_secs(reconnect_secs())).await;
+                    sleep(reconnect_delay(reconnect_attempts)).await;
                     continue;
                 }
 
@@ -681,7 +694,8 @@ async fn run_kraken(state: AppState) {
             }
         }
 
-        sleep(Duration::from_secs(reconnect_secs())).await;
+        reconnect_attempts = reconnect_attempts.saturating_add(1);
+        sleep(reconnect_delay(reconnect_attempts)).await;
     }
 }
 
@@ -704,10 +718,12 @@ async fn run_coinbase(state: AppState) {
         .zip(symbols.iter().cloned())
         .collect::<HashMap<_, _>>();
 
+    let mut reconnect_attempts = 0u32;
     loop {
         eprintln!("crypto websocket: connecting Coinbase Advanced Trade");
         match connect_async("wss://advanced-trade-ws.coinbase.com").await {
             Ok((mut socket, _)) => {
+                reconnect_attempts = 0;
                 state.streams.connected("coinbase").await;
                 let trade_subscription = json!({
                     "type": "subscribe",
