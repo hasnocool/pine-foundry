@@ -85,3 +85,53 @@ min <= value <= max
 Missing values fail enabled filters.
 
 Universe issue types are applied before numeric filters. Session mismatches fail unless the scan uses closed as the wildcard-like session.
+
+
+## Public market-data proxy routes
+
+Provider discovery:
+
+```
+GET /api/providers
+GET /api/providers/health
+```
+
+Canadian equities / FX:
+
+```
+GET /api/providers/tradingview/canada/:start/:end
+GET /api/providers/tradingview/forex/:start/:end
+GET /api/providers/yahoo/fx/:symbol
+GET /api/providers/frankfurter/:base/:quote
+GET /api/providers/frankfurter/:base/rates/:quotes
+```
+
+Crypto:
+
+```
+GET /api/providers/binance/:symbol/quote
+GET /api/providers/binance/:symbol/ticker
+GET /api/providers/binance/:symbol/klines/:interval
+GET /api/providers/binance/:symbol/depth
+
+GET /api/providers/kraken/:symbol/ticker
+GET /api/providers/kraken/:symbol/ohlc/:interval
+GET /api/providers/kraken/:symbol/depth
+GET /api/providers/kraken/:symbol/trades
+
+GET /api/providers/coinbase/:symbol/ticker
+GET /api/providers/coinbase/:symbol/candles/:granularity
+GET /api/providers/coinbase/:symbol/book
+GET /api/providers/coinbase/:symbol/trades
+```
+
+U.S. and global equity routes remain:
+
+```
+GET /api/providers/yahoo/:symbol
+GET /api/providers/nasdaq/:symbol
+GET /api/providers/nasdaq/:symbol/info
+GET /api/providers/tradingview/:exchange/:symbol
+```
+
+All public-provider routes are keyless in the current implementation. Provider health tracks successful/failed requests so a provider can be degraded without taking down the scanner.
