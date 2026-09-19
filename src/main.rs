@@ -708,11 +708,12 @@ fn metrics(s: &SecurityState) -> Metrics {
     } else {
         0.0
     };
+    let closes = s.minute_buckets.iter().map(|bucket| bucket.close_price).collect::<Vec<_>>();
     let mut returns = Vec::new();
-    for window in s.minute_buckets.as_slices().0.windows(2) {
+    for window in closes.windows(2) {
         if let [a, b] = window {
-            if a.close_price > 0.0 && b.close_price > 0.0 {
-                returns.push((b.close_price / a.close_price).ln());
+            if *a > 0.0 && *b > 0.0 {
+                returns.push((*b / *a).ln());
             }
         }
     }
