@@ -37,6 +37,8 @@ pub struct BookMetrics {
     pub ask_depth_10: f64,
     pub book_imbalance: Option<f64>,
     pub liquidity_score: f64,
+    pub executable_buy_1000: f64,
+    pub executable_sell_1000: f64,
 }
 
 impl OrderBookState {
@@ -139,6 +141,8 @@ impl OrderBookState {
             ask_depth_10,
             book_imbalance,
             liquidity_score: total,
+            executable_buy_1000: executable_quantity(&self.asks, 1000.0),
+            executable_sell_1000: executable_quantity(&self.bids, 1000.0),
         }
     }
 
@@ -148,6 +152,23 @@ impl OrderBookState {
             self.asks.iter().take(depth).cloned().collect(),
         )
     }
+}
+
+fn executable_quantity(levels: &[BookLevel], budget: f64) -> f64 {
+    if budget <= 0.0 { return 0.0; }
+    let mut remaining = budget;
+    let mut quantity = 0.0;
+    for level in levels {
+        let notional = level.price * level.quantity;
+        if notional <= remaining {
+            quantity += level.quantity;
+            remaining -= notional;
+        } else {
+            quantity += remaining / level.price;
+            break;
+        }
+    }
+    quantity
 }
 
 fn normalize(mut levels: Vec<BookLevel>, side: BookSide) -> Vec<BookLevel> {
