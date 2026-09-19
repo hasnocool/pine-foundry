@@ -161,3 +161,14 @@ News, Canadian disclosures and SEC filings are written into the event journal an
 ~~~text
 cargo run -- replay YYYY-MM-DD
 ~~~
+
+
+## Configurable entity aliases
+
+Add company or asset-name aliases without changing code:
+
+~~~text
+PINE_FOUNDRY_NEWS_ALIASES=AAPL=Apple|Apple Inc;MSFT=Microsoft|Microsoft Corporation
+~~~
+
+Each entry is `TICKER=alias1|alias2`. These aliases are added to the normal `$TICKER OR TICKER` search query for Reddit, Google News and NewsAPI.
