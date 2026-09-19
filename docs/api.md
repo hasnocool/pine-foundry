@@ -6,7 +6,14 @@ Base URL: http://127.0.0.1:3000
 
 GET /health
 
-Returns scanner, market-provider and news-provider health.
+Returns scanner, market-provider, crypto-stream, news, SEC, Canadian-disclosure and journal-drop health.
+
+Dedicated health endpoints:
+- GET /api/providers/health
+- GET /api/streams/health
+- GET /api/journal/health
+- GET /api/news/health
+- GET /api/filings/health
 
 ## Presets
 
@@ -15,6 +22,16 @@ GET /api/presets
 POST /api/presets
 
 DELETE /api/presets/:id
+
+Builtin scanner presets now include:
+- equity gainers/fallers
+- Gap & Go / Gap & Fade
+- low float
+- momentum breakout
+- extended movers
+- Crypto Momentum
+- Crypto Order Flow
+- FX Momentum
 
 ## Scans
 
@@ -28,11 +45,41 @@ DELETE /api/scans/:id
 
 GET /api/scans/:id/snapshot
 
+Scanner fields include the original equity fields plus:
+- spread_bps
+- book_imbalance
+- liquidity_score
+- trade_imbalance
+- cvd
+- cross_venue_dislocation_bps
+- news_count_5m
+- news_count_15m
+- news_velocity
+- news_sources_15m
+- stream_age_ms
+
 ## Scanner WebSocket
 
 GET /ws/scanner/:id
 
 The first server message is a snapshot. Later messages are result_added, result_updated, result_removed or resync_required events.
+
+## Symbol evidence
+
+GET /api/evidence/:symbol
+
+Returns:
+- current scanner row
+- current classified catalyst
+- recent CatalystEvent records
+- venue prices/bids/asks
+- per-venue age
+- book metrics
+- recent related normalized news
+
+GET /api/catalysts/:symbol
+
+Returns the symbol's recent normalized CatalystEvent list.
 
 ## Market provider proxies
 
@@ -67,6 +114,16 @@ Crypto REST snapshots:
 - GET /api/providers/coinbase/:symbol/book
 - GET /api/providers/coinbase/:symbol/trades
 
+## Regulatory and Canadian disclosures
+
+SEC:
+- GET /api/filings/:ticker
+- Public SEC EDGAR submissions are normalized as FilingEvent records.
+
+Canada:
+- GET /api/canada/disclosures/:ticker
+- Uses public Google News RSS discovery constrained to SEDAR+ and TSX public-news domains rather than undocumented SEDAR+ internal APIs.
+
 ## News
 
 Unified search:
@@ -84,16 +141,32 @@ Google News only:
 NewsAPI only:
 - GET /api/news/newsapi?q={query}&ticker={ticker}&limit={n}
 
+Canadian disclosure discovery:
+- GET /api/canada/disclosures/:ticker
+
 Recent normalized cache:
 - GET /api/news/cache
+
+Story clusters:
+- GET /api/news/clusters
 
 News provider health:
 - GET /api/news/health
 
-Example broad ticker search:
+## Replay
+
+CLI:
 
 ~~~text
-GET /api/news/ticker/BTC
+cargo run -- replay 2026-09-19
 ~~~
 
-This expands BTC into a broader Bitcoin/Ripple-style name query where an alias is known, then queries Reddit RSS, Reddit JSON, Google News RSS and NewsAPI. Provider failures are tolerated as long as at least one provider returns results.
+The replay reads data/events/YYYY-MM-DD.jsonl and replays:
+- quotes
+- trades
+- books
+- news
+- Canadian disclosures
+- SEC filings
+
+through the same state/feature engine used by the live runtime.
