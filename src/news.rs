@@ -1,5 +1,5 @@
 // src/news.rs
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use futures_util::stream::{self, StreamExt};
 use quick_xml::{events::Event, reader::Reader};
 use reqwest::Client;
