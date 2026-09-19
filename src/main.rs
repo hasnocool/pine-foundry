@@ -1108,7 +1108,12 @@ async fn symbol_evidence(
     let now = now_ms();
     let mut venues = Vec::new();
     for (key, venue) in &state.venues {
-        let book = state.books.get(key).map(OrderBookState::metrics).unwrap_or_default();
+        let book = state
+            .books
+            .get(key)
+            .filter(|book| book.valid)
+            .map(OrderBookState::metrics)
+            .unwrap_or_default();
         venues.push(VenueEvidence {
             provider: venue.provider,
             venue: venue.venue.clone(),
