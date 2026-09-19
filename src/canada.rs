@@ -44,7 +44,7 @@ impl CanadianDisclosureRouter {
         }
     }
 
-    pub async fn refresh_configured(&self) {
+    pub async fn refresh_configured(&self) -> Vec<NewsArticle> {
         let tickers = env::var("PINE_FOUNDRY_CANADA_TICKERS").unwrap_or_default().split(',').map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned).collect::<Vec<_>>();
         let worker = stream::iter(tickers).map(|ticker| { let router=self.clone(); async move { router.search_ticker(&ticker, 25).await } }).buffer_unordered(2);
         worker.for_each(|result| async {
@@ -61,7 +61,11 @@ impl CanadianDisclosureRouter {
     }
 }
 
-pub async fn run_canadian_disclosure_feed(router: Arc<CanadianDisclosureRouter>) {
+pub async fn run_canadian_disclosure_feed(router: Arc<CanadianDisclosureRouter>, state: crate::AppState) {
     let poll_secs = env::var("PINE_FOUNDRY_CANADA_POLL_SECS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(300).clamp(60, 3600);
-    loop { router.refresh_configured().await; sleep(Duration::from_secs(poll_secs)).await; }
+    loop {
+        let articles = router.refresh_configured().await;
+        crate::ingest_news_articles(&state, &articles).await;
+        sleep(Duration::from_secs(poll_secs)).await;
+    }
 }
