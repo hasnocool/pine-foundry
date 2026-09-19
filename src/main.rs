@@ -1351,12 +1351,17 @@ async fn ingest_public_quote(s: &AppState, quote: PublicQuote) {
         providers::AssetClass::Equity => configured_live_session(),
         providers::AssetClass::Crypto | providers::AssetClass::Fx => MarketSession::Regular,
     };
+    let symbol = quote.symbol.clone();
+    let provider = quote.source;
+    let venue = quote.venue.to_string();
+    let ts_ms = quote.ts_ms;
     let updated = {
         let mut market = s.market.write().await;
-        let state = market.entry(quote.symbol.clone())
-            .or_insert_with(|| SecurityState::blank(&quote.symbol, quote.price, session, quote.ts_ms));
+        let state = market
+            .entry(symbol.clone())
+            .or_insert_with(|| SecurityState::blank(&symbol, quote.price, session, ts_ms));
         let old_volume = state.day_volume;
-        state.last_price = quote.price;
+
         state.issue_type = match quote.issue_type {
             "common_stock" => IssueType::CommonStock,
             "etf" => IssueType::Etf,
@@ -1374,46 +1379,157 @@ async fn ingest_public_quote(s: &AppState, quote: PublicQuote) {
         state.shares_outstanding = quote.shares_outstanding.or(state.shares_outstanding);
         state.market_cap = quote.market_cap.or(state.market_cap);
         state.session = session;
+
         if let Some(volume) = quote.volume {
             state.day_volume = volume.max(0.0);
         }
+
         let volume_delta = (state.day_volume - old_volume).max(0.0);
-        state.last_updated_ms = quote.ts_ms;
-        minute_update(state, quote.ts_ms, quote.price, volume_delta);
+        state.last_updated_ms = ts_ms;
+        minute_update(state, ts_ms, quote.price, volume_delta);
+        update_venue(
+            state,
+            provider,
+            &venue,
+            Some(quote.price),
+            None,
+            None,
+            quote.volume,
+            ts_ms,
+            None,
+        );
         state.clone()
     };
+
+    if let Ok(payload) = serde_json::to_value(&quote) {
+        s.journal.append(JournalRecord {
+            event_id: Uuid::new_v4().to_string(),
+            received_at_ms: now_ms(),
+            kind: "quote".to_string(),
+            symbol: Some(symbol),
+            provider: Some(provider.as_str().to_string()),
+            venue: Some(venue),
+            sequence: None,
+            payload,
+        });
+    }
     publish_market_state(s, updated).await;
 }
 
-async fn ingest(s: &AppState, event: MarketEvent) {
-    let symbol = match &event {
-        MarketEvent::Quote { symbol, .. } | MarketEvent::Trade { symbol, .. } | MarketEvent::Reference { symbol, .. } => symbol,
+pub(crate) async fn ingest_book(
+    s: &AppState,
+    symbol: String,
+    provider: providers::ProviderId,
+    venue: String,
+    sequence: Option<u64>,
+    snapshot: bool,
+    bids: Vec<BookLevel>,
+    asks: Vec<BookLevel>,
+    ts_ms: i64,
+) {
+    let mid_hint = match (bids.first(), asks.first()) {
+        (Some(bid), Some(ask)) => (bid.price + ask.price) / 2.0,
+        (Some(bid), None) => bid.price,
+        (None, Some(ask)) => ask.price,
+        _ => 0.0,
     };
     let updated = {
         let mut market = s.market.write().await;
-        if let Some(state) = market.get_mut(symbol) { apply_event(state, &event); Some(state.clone()) } else { None }
+        let state = market
+            .entry(symbol.clone())
+            .or_insert_with(|| SecurityState::blank(&symbol, mid_hint, MarketSession::Regular, ts_ms));
+        let key = venue.to_ascii_lowercase();
+        let book = state.books.entry(key.clone()).or_default();
+        if snapshot {
+            book.replace(bids.clone(), asks.clone(), sequence, ts_ms);
+        } else {
+            let _ = book.apply_update(&bids, &asks, sequence, ts_ms);
+        }
+
+        let book_metrics = book.metrics();
+        update_venue(
+            state,
+            provider,
+            &venue,
+            book_metrics.mid,
+            book_metrics.best_bid,
+            book_metrics.best_ask,
+            None,
+            ts_ms,
+            sequence,
+        );
+        state.last_updated_ms = ts_ms;
+        state.clone()
+    };
+
+    if let Ok(payload) = serde_json::to_value(serde_json::json!({
+        "symbol": symbol,
+        "provider": provider,
+        "venue": venue,
+        "sequence": sequence,
+        "snapshot": snapshot,
+        "bids": bids,
+        "asks": asks,
+        "ts_ms": ts_ms
+    })) {
+        s.journal.append(JournalRecord {
+            event_id: Uuid::new_v4().to_string(),
+            received_at_ms: now_ms(),
+            kind: "book".to_string(),
+            symbol: Some(updated.symbol.clone()),
+            provider: Some(provider.as_str().to_string()),
+            venue: Some(venue),
+            sequence,
+            payload,
+        });
+    }
+
+    publish_market_state(s, updated).await;
+}
+
+pub(crate) async fn ingest(
+    s: &AppState,
+    event: MarketEvent,
+    provider: providers::ProviderId,
+    venue: String,
+    sequence: Option<u64>,
+    side: Option<streams::TradeSide>,
+) {
+    let symbol = match &event {
+        MarketEvent::Quote { symbol, .. }
+        | MarketEvent::Trade { symbol, .. }
+        | MarketEvent::Reference { symbol, .. } => symbol,
+    };
+    let updated = {
+        let mut market = s.market.write().await;
+        if let Some(state) = market.get_mut(symbol) {
+            apply_event(state, &event, provider, &venue, sequence, side);
+            Some(state.clone())
+        } else {
+            None
+        }
     };
     let Some(updated) = updated else { return; };
 
-    let mut scans = s.scans.write().await;
-    for scan in scans.values_mut() {
-        let before = scan.matches.contains(symbol);
-        let after = matches_scan(&scan.definition, &updated);
-        match (before, after) {
-            (false, true) => {
-                scan.matches.insert(symbol.clone());
-                let _ = scan.tx.send(ScannerEvent::ResultAdded { scan_id: scan.id, row: row(&updated) });
-            }
-            (true, false) => {
-                scan.matches.remove(symbol);
-                let _ = scan.tx.send(ScannerEvent::ResultRemoved { scan_id: scan.id, symbol: symbol.clone() });
-            }
-            (true, true) => {
-                let _ = scan.tx.send(ScannerEvent::ResultUpdated { scan_id: scan.id, row: row(&updated) });
-            }
-            (false, false) => {}
-        }
+    if let Ok(payload) = serde_json::to_value(&event) {
+        let kind = match &event {
+            MarketEvent::Quote { .. } => "quote",
+            MarketEvent::Trade { .. } => "trade",
+            MarketEvent::Reference { .. } => "reference",
+        };
+        s.journal.append(JournalRecord {
+            event_id: Uuid::new_v4().to_string(),
+            received_at_ms: now_ms(),
+            kind: kind.to_string(),
+            symbol: Some(symbol.clone()),
+            provider: Some(provider.as_str().to_string()),
+            venue: Some(venue),
+            sequence,
+            payload,
+        });
     }
+
+    publish_market_state(s, updated).await;
 }
 
 fn csv_env(name: &str, default_value: &str) -> Vec<String> {
