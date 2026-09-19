@@ -446,6 +446,6 @@ mod tests {
     #[test]
     fn parses_rfc3339_timestamp() {
         let value = serde_json::json!("2026-09-19T12:34:56.000Z");
-        assert_eq!(timestamp_ms(Some(&value)), 1_789_129_696_000);
+        assert_eq!(timestamp_ms(Some(&value)), 1_789_821_296_000);
     }
 }
