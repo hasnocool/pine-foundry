@@ -701,14 +701,15 @@ fn metrics(s: &SecurityState) -> Metrics {
     let volume_1m = s.minute_buckets.back().map(|b| b.volume).unwrap_or(0.0);
     let book = current_book_metrics(s);
     let (news_count_5m, news_count_15m, news_velocity, news_sources_15m) = news_metrics(s);
-    let avg_volume_15m = if s.minute_buckets.is_empty() {
+    let baseline_buckets = s.minute_buckets.iter().rev().skip(1).take(15).collect::<Vec<_>>();
+    let baseline_volume = if baseline_buckets.is_empty() {
         0.0
     } else {
-        s.minute_buckets.iter().map(|bucket| bucket.volume).sum::<f64>()
-            / s.minute_buckets.len() as f64
+        baseline_buckets.iter().map(|bucket| bucket.volume).sum::<f64>()
+            / baseline_buckets.len() as f64
     };
-    let relative_volume_15m = if avg_volume_15m > 0.0 {
-        volume_1m / avg_volume_15m
+    let relative_volume_15m = if baseline_volume > 0.0 {
+        volume_1m / baseline_volume
     } else {
         0.0
     };
