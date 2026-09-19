@@ -601,6 +601,34 @@ impl PublicProviderRouter {
             .await
     }
 
+    pub async fn binance_quote(&self, symbol: &str) -> Result<PublicQuote, String> {
+        let value = self.binance_24h(symbol).await?;
+        let price = value.get("lastPrice").and_then(as_f64)
+            .ok_or_else(|| "Binance ticker missing lastPrice".to_string())?;
+        let change_pct = value.get("priceChangePercent").and_then(as_f64);
+        let previous_close = change_pct
+            .filter(|pct| *pct > -99.999)
+            .map(|pct| price / (1.0 + pct / 100.0));
+        let volume = value.get("volume").and_then(as_f64);
+
+        Ok(PublicQuote {
+            symbol: symbol.to_ascii_uppercase(),
+            asset_class: AssetClass::Crypto,
+            issue_type: "other",
+            venue: "Binance",
+            price,
+            previous_close,
+            change_pct,
+            volume,
+            market_cap: None,
+            shares_float: None,
+            shares_outstanding: None,
+            ts_ms: now_ms(),
+            session: "regular".to_string(),
+            source: ProviderId::Binance,
+        })
+    }
+
     pub async fn binance_24h(&self, symbol: &str) -> Result<Value, String> {
         let url = format!(
             "https://data-api.binance.vision/api/v3/ticker/24hr?symbol={}",
