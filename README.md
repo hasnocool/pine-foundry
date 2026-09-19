@@ -1,50 +1,99 @@
 # Pine Foundry
 
-A local-first, real-time market scanner and research foundation inspired by the public interaction model of modern equity scanners.
+Pine Foundry is a local-first, real-time market scanner and research foundation built around a deterministic event-driven scanner engine.
 
-> This project implements an original scanner engine and UI architecture. It does not copy proprietary source code, branding, assets, or undocumented TradeZero internals.
+It is an original implementation inspired by the public workflow of desktop equity scanners. It does not copy proprietary source code, branding, assets, private thresholds, or undocumented vendor internals.
 
-## Goals
+## Implemented
 
-- Event-driven market-state engine instead of polling.
-- Configurable issue-type, fundamental, price, change, and volume filters.
-- 1m/5m/15m rolling metrics.
-- Incremental result membership and ranking updates.
-- WebSocket snapshot + delta protocol.
-- Persistent, versioned scanner presets.
-- Three independent scanner windows.
-- Virtualized result-grid friendly API.
-- Historical replay hooks for research.
-- Clean boundary for future broker, alert, and AI integrations.
-
-## Repository policy
-
-No GitHub Actions are used. Development is driven by local tooling and explicit benchmark/test commands documented in `docs/development.md`.
-
-## Layout
-
-```
-crates/
-  scanner-core/     Pure scanner state, metrics, filters, ranking, presets.
-  scanner-server/   Axum HTTP/WebSocket server and mock-feed runtime.
-  scanner-cli/      Local CLI for loading/evaluating sample scans.
-web/                TypeScript browser client.
-docs/               Architecture, protocol, API, and development docs.
-presets/            Default scanner definitions.
-scripts/            Local verification/benchmark helpers.
-```
+- Event-driven market state instead of polling.
+- Price, absolute change, previous-close %, 1m/5m/15m % metrics.
+- Day volume and rolling 1m volume.
+- Shares float, shares outstanding and market cap.
+- Issue-type and session universe controls.
+- Min/max filters with explicit enable/disable state.
+- Saved builtin/custom presets with JSON persistence.
+- Stable ranked result snapshots.
+- Incremental add/remove/update scanner events.
+- WebSocket snapshot + delta + resync protocol.
+- REST API for scans and presets.
+- Three-window-ready backend.
+- Working browser UI with filter editing, preset switching, column visibility and sorting.
+- Deterministic synthetic feed so the system runs without a market-data API.
+- CLI for listing builtin presets.
+- Local tests and validation only; **no GitHub Actions**.
 
 ## Quick start
 
 ```bash
-cargo test --workspace
-cargo run -p scanner-server
+cargo fmt --all -- --check
+cargo check
+cargo test
+cargo run -- serve
 ```
 
-Then open `web/index.html` with a static HTTP server and point it at the scanner server.
+Server:
 
-The default server uses a deterministic synthetic market feed, so the project is usable without a market-data vendor. A provider adapter can be added without changing the scanner engine.
+```
+http://127.0.0.1:3000
+```
 
-## License
+Health:
 
-MIT
+```
+curl http://127.0.0.1:3000/health
+```
+
+List presets:
+
+```
+cargo run -- presets
+```
+
+Web client:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Then open the Vite URL shown by the dev server.
+
+## Configuration
+
+`PINE_FOUNDRY_ADDR` defaults to `127.0.0.1:3000`.
+
+`PINE_FOUNDRY_DATA_DIR` defaults to `data` and stores custom presets in `presets.json`.
+
+## Architecture
+
+```
+market provider
+   |
+   v
+MarketEvent
+   |
+   v
+SecurityState + rolling minute history
+   |
+   v
+Metrics
+   |
+   v
+Filter evaluation
+   |
+   v
+ScanRuntime membership
+   |
+   +--> REST snapshot
+   |
+   +--> WebSocket deltas
+   |
+   v
+browser scanner
+```
+
+The production provider boundary should normalize quotes, trades, reference data, session changes, halt status and sequence information into the same event model used by the scanner.
+
+See [docs/master-spec.md](docs/master-spec.md) and [docs/development.md](docs/development.md).

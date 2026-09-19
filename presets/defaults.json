@@ -1,0 +1,11 @@
+[
+  {"name":"Small Cap Gainers (5m)","filters":{"float_max":20000000,"chg5m_min":2,"day_volume_min":100000,"volume1m_min":10000}},
+  {"name":"Large Cap Gainers (5m)","filters":{"market_cap_min":1000000000,"chg5m_min":2,"day_volume_min":250000,"volume1m_min":20000}},
+  {"name":"Small Cap Fallers (5m)","filters":{"float_max":20000000,"chg5m_max":-2,"day_volume_min":100000,"volume1m_min":10000}},
+  {"name":"Large Cap Fallers (5m)","filters":{"market_cap_min":1000000000,"chg5m_max":-2,"day_volume_min":250000,"volume1m_min":20000}},
+  {"name":"Gap & Go","filters":{"chg_prev_close_min":2,"day_volume_min":250000,"volume1m_min":20000}},
+  {"name":"Gap & Fade","filters":{"chg_prev_close_max":-2,"day_volume_min":250000,"volume1m_min":20000}},
+  {"name":"Low Float","filters":{"float_max":5000000,"volume1m_min":10000}},
+  {"name":"Momentum Breakout","filters":{"chg5m_min":1.5,"chg1m_min":0.5,"volume1m_min":20000}},
+  {"name":"Extended Movers","filters":{"chg15m_min":3,"volume1m_min":10000}}
+]
