@@ -336,6 +336,27 @@ struct ScanSummary {
     total_matches: usize,
 }
 
+#[derive(Debug, Serialize)]
+struct VenueEvidence {
+    provider: providers::ProviderId,
+    venue: String,
+    last_price: Option<f64>,
+    bid: Option<f64>,
+    ask: Option<f64>,
+    age_ms: i64,
+    sequence: Option<u64>,
+    book: BookMetrics,
+}
+
+#[derive(Debug, Serialize)]
+struct SymbolEvidence {
+    symbol: String,
+    row: ScannerRow,
+    catalyst: Option<String>,
+    venues: Vec<VenueEvidence>,
+    recent_news: Vec<NewsArticle>,
+}
+
 fn default_columns() -> Vec<ColumnSpec> {
     [
         Field::Price, Field::Change, Field::ChangePctPrevClose, Field::ChangePct1m,
@@ -885,6 +906,51 @@ async fn health(State(s): State<AppState>) -> Json<Health> {
 
 async fn provider_health(State(s): State<AppState>) -> Json<Vec<ProviderHealth>> {
     Json(s.providers.health().await)
+}
+
+async fn symbol_evidence(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<SymbolEvidence>, (StatusCode, String)> {
+    let state = {
+        let market = s.market.read().await;
+        market.get(&symbol.to_ascii_uppercase()).cloned()
+    }
+    .ok_or((StatusCode::NOT_FOUND, "symbol not found".to_string()))?;
+
+    let now = now_ms();
+    let mut venues = Vec::new();
+    for (key, venue) in &state.venues {
+        let book = state.books.get(key).map(OrderBookState::metrics).unwrap_or_default();
+        venues.push(VenueEvidence {
+            provider: venue.provider,
+            venue: venue.venue.clone(),
+            last_price: venue.last_price,
+            bid: venue.bid,
+            ask: venue.ask,
+            age_ms: now.saturating_sub(venue.last_event_ms),
+            sequence: venue.last_sequence,
+            book,
+        });
+    }
+    venues.sort_by(|a, b| a.venue.cmp(&b.venue));
+
+    let recent_news = s
+        .news
+        .cache()
+        .await
+        .into_iter()
+        .filter(|article| article.ticker.as_deref().map(|value| value.eq_ignore_ascii_case(&symbol)).unwrap_or(false))
+        .take(20)
+        .collect::<Vec<_>>();
+
+    Ok(Json(SymbolEvidence {
+        symbol: state.symbol.clone(),
+        row: row(&state),
+        catalyst: state.last_catalyst.clone(),
+        venues,
+        recent_news,
+    }))
 }
 
 async fn stream_health(State(s): State<AppState>) -> Json<Vec<streams::StreamHealth>> {
@@ -1853,7 +1919,7 @@ async fn run_server() {
     let journal = Arc::new(EventJournal::spawn(data_dir.join("events")));
     let news = Arc::new(NewsRouter::new().expect("public news client"));
     let filings = Arc::new(SecFilingRouter::new(journal.clone()).expect("SEC client"));
-    let stream_health = Arc::new(streams::StreamHealthStore::new());
+    let stream_store = Arc::new(streams::StreamHealthStore::new());
     let state = AppState {
         market: Arc::new(RwLock::new(seed_market())),
         scans: Arc::new(RwLock::new(HashMap::new())),
@@ -1862,7 +1928,7 @@ async fn run_server() {
         news,
         filings,
         journal,
-        streams: stream_health,
+        streams: stream_store,
     };
 
     let app = Router::new()
@@ -1870,6 +1936,7 @@ async fn run_server() {
         .route("/api/providers", get(provider_routes))
         .route("/api/providers/health", get(provider_health))
         .route("/api/streams/health", get(stream_health))
+        .route("/api/evidence/:symbol", get(symbol_evidence))
         .route("/api/filings/health", get(filing_health))
         .route("/api/filings/:ticker", get(filing_search))
         .route("/api/providers/yahoo/:symbol", get(api_yahoo_quote))
