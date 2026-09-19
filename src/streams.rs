@@ -430,3 +430,22 @@ async fn run_coinbase(state: AppState) {
         sleep(Duration::from_secs(reconnect_secs())).await;
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn converts_common_exchange_symbols() {
+        assert_eq!(kraken_pair("BTCUSDT"), "BTC/USD");
+        assert_eq!(kraken_pair("ETHUSDC"), "ETH/USD");
+        assert_eq!(coinbase_product("SOLUSDT"), "SOL-USD");
+    }
+
+    #[test]
+    fn parses_rfc3339_timestamp() {
+        let value = serde_json::json!("2026-09-19T12:34:56.000Z");
+        assert_eq!(timestamp_ms(Some(&value)), 1_789_129_696_000);
+    }
+}
