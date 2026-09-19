@@ -762,3 +762,52 @@ fn now_ms() -> i64 {
         .expect("clock before epoch")
         .as_millis() as i64
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ticker_query_expands_known_crypto_aliases() {
+        let query = broad_ticker_query("BTC");
+        assert!(query.contains("Bitcoin"));
+        assert!(query.contains("$"));
+    }
+
+    #[test]
+    fn rss_parser_handles_atom_search_results() {
+        let xml = r#"<feed xmlns="http://www.w3.org/2005/Atom">
+            <entry>
+                <title>Bitcoin headline</title>
+                <link href="https://www.reddit.com/r/Bitcoin/comments/abc/headline/" />
+                <updated>2026-09-19T12:34:56Z</updated>
+                <author><name>tester</name></author>
+            </entry>
+        </feed>"#;
+        let items = parse_rss(xml, "reddit_rss", "bitcoin", Some("BTC"));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].ticker.as_deref(), Some("BTC"));
+        assert_eq!(items[0].subreddit.as_deref(), Some("r/Bitcoin"));
+    }
+
+    #[test]
+    fn dedupe_is_url_based() {
+        let first = NewsArticle {
+            id: "a".into(),
+            provider: "one".into(),
+            query: "x".into(),
+            ticker: None,
+            title: "Headline".into(),
+            description: None,
+            url: "https://example.com/story".into(),
+            source: None,
+            author: None,
+            subreddit: None,
+            published_at: None,
+            published_at_ms: Some(2),
+        };
+        let second = NewsArticle { id: "b".into(), provider: "two".into(), ..first.clone() };
+        assert_eq!(dedupe_and_sort(vec![first, second]).len(), 1);
+    }
+}
