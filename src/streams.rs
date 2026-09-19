@@ -98,26 +98,29 @@ async fn ingest_crypto_trade(
     source: providers::ProviderId,
     venue: &'static str,
 ) {
-    ingest_public_quote(
-        state,
-        providers::PublicQuote {
-            symbol: symbol.clone(),
-            asset_class: providers::AssetClass::Crypto,
-            issue_type: "other",
-            venue,
-            price,
-            previous_close: None,
-            change_pct: None,
-            volume: None,
-            market_cap: None,
-            shares_float: None,
-            shares_outstanding: None,
-            ts_ms,
-            session: "regular".to_string(),
-            source,
-        },
-    )
-    .await;
+    let known = state.market.read().await.contains_key(&symbol);
+    if !known {
+        ingest_public_quote(
+            state,
+            providers::PublicQuote {
+                symbol: symbol.clone(),
+                asset_class: providers::AssetClass::Crypto,
+                issue_type: "other",
+                venue,
+                price,
+                previous_close: None,
+                change_pct: None,
+                volume: None,
+                market_cap: None,
+                shares_float: None,
+                shares_outstanding: None,
+                ts_ms,
+                session: "regular".to_string(),
+                source,
+            },
+        )
+        .await;
+    }
 
     ingest(
         state,
