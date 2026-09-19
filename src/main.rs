@@ -2177,7 +2177,7 @@ async fn run_server() {
     let journal = Arc::new(EventJournal::spawn(data_dir.join("events")));
     let news = Arc::new(NewsRouter::new().expect("public news client"));
     let filings = Arc::new(SecFilingRouter::new(journal.clone()).expect("SEC client"));
-    let canada = Arc::new(CanadianDisclosureRouter::new(news.clone(), journal.clone()));
+    let canada = Arc::new(CanadianDisclosureRouter::new(news.clone()));
     let stream_store = Arc::new(streams::StreamHealthStore::new());
     let state = AppState {
         market: Arc::new(RwLock::new(seed_market())),
@@ -2295,7 +2295,7 @@ async fn run_replay(date: String) {
         providers: Arc::new(PublicProviderRouter::new().expect("public provider client")),
         news: replay_news.clone(),
         filings: Arc::new(SecFilingRouter::new(journal.clone()).expect("SEC client")),
-        canada: Arc::new(CanadianDisclosureRouter::new(replay_news, journal.clone())),
+        canada: Arc::new(CanadianDisclosureRouter::new(replay_news)),
         journal,
         streams: Arc::new(streams::StreamHealthStore::new()),
     };
