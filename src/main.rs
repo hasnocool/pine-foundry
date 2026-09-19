@@ -2433,6 +2433,74 @@ mod tests {
     }
 
     #[test]
+    fn asset_class_universe_isolation() {
+        let now = 1_800_000_000_000_i64;
+        let mut state = SecurityState::new("BTCUSDT", 100.0, 0.0, 0.0, 0.0, now);
+        state.asset_class = providers::AssetClass::Crypto;
+        state.issue_type = IssueType::Other;
+
+        let equity = base_definition("equity");
+        assert!(!matches_scan(&equity, &state));
+
+        let crypto = ScanDefinition {
+            name: "crypto".to_string(),
+            universe: UniverseSpec {
+                issue_types: vec![IssueType::Other],
+                asset_classes: vec![providers::AssetClass::Crypto],
+                session: MarketSession::Regular,
+            },
+            filters: vec![],
+            sort: SortSpec::default(),
+            columns: default_columns(),
+            version: 1,
+        };
+        assert!(matches_scan(&crypto, &state));
+    }
+
+    #[test]
+    fn advanced_metrics_are_populated() {
+        let now = 1_800_000_000_000_i64;
+        let mut state = SecurityState::new("BTCUSDT", 100.0, 0.0, 0.0, 0.0, now);
+        state.asset_class = providers::AssetClass::Crypto;
+        state.minute_buckets.push_back(MinuteBucket {
+            start_ms: now - 60_000,
+            close_price: 99.0,
+            volume: 100.0,
+        });
+        state.minute_buckets.push_back(MinuteBucket {
+            start_ms: now,
+            close_price: 100.0,
+            volume: 300.0,
+        });
+        let mut book = OrderBookState::default();
+        book.replace(
+            vec![BookLevel { price: 99.9, quantity: 20.0 }],
+            vec![BookLevel { price: 100.1, quantity: 10.0 }],
+            Some(2),
+            now,
+        );
+        state.books.insert("binance".to_string(), book);
+        state.venues.insert(
+            "binance".to_string(),
+            VenueState {
+                provider: providers::ProviderId::Binance,
+                venue: "Binance".to_string(),
+                last_price: Some(100.0),
+                bid: Some(99.9),
+                ask: Some(100.1),
+                day_volume: 400.0,
+                last_event_ms: now,
+                last_sequence: Some(2),
+            },
+        );
+        let m = metrics(&state);
+        assert!(m.spread_bps.is_some());
+        assert!(m.relative_volume_15m > 1.0);
+        assert!(m.executable_buy_1000 > 0.0);
+        assert!(m.volatility_15m_pct >= 0.0);
+    }
+
+    #[test]
     fn metrics_use_historical_buckets() {
         let now = 1_800_000_000_000_i64;
         let mut state = SecurityState::new("TEST", 10.0, 5_000_000.0, 7_000_000.0, 56_000_000.0, now);
