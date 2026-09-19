@@ -2,6 +2,9 @@
 mod providers;
 mod streams;
 mod news;
+mod orderbook;
+mod journal;
+mod filings;
 use axum::{
     extract::{ws::{Message, WebSocket, WebSocketUpgrade}, Path, Query, State},
     http::StatusCode,
@@ -11,7 +14,10 @@ use axum::{
 };
 use clap::{Parser, Subcommand};
 use futures_util::{SinkExt, StreamExt};
+use filings::{FilingEvent, FilingHealth, SecFilingRouter};
+use journal::{EventJournal, JournalRecord};
 use news::{NewsArticle, NewsProviderHealth, NewsRouter};
+use orderbook::{BookLevel, BookMetrics, OrderBookState};
 use providers::{ProviderHealth, PublicProviderRouter, PublicQuote};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -38,6 +44,7 @@ enum Command {
     Serve,
     Presets,
     Providers,
+    Replay { date: String },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -53,6 +60,9 @@ enum MarketSession { PreMarket, Regular, AfterHours, Closed }
 enum Field {
     Price, Change, ChangePctPrevClose, ChangePct1m, ChangePct5m, ChangePct15m,
     DayVolume, Volume1m, SharesFloat, SharesOutstanding, MarketCap, IssueType,
+    SpreadBps, BookImbalance, LiquidityScore, TradeImbalance, Cvd,
+    CrossVenueDislocationBps, NewsCount5m, NewsCount15m, NewsVelocity,
+    NewsSources15m, StreamAgeMs,
 }
 
 impl Field {
@@ -70,6 +80,17 @@ impl Field {
             Self::SharesOutstanding => "Shares Outstanding",
             Self::MarketCap => "Market Cap",
             Self::IssueType => "Issue Type",
+            Self::SpreadBps => "Spread (bps)",
+            Self::BookImbalance => "Book Imbalance",
+            Self::LiquidityScore => "Liquidity",
+            Self::TradeImbalance => "Trade Imbalance",
+            Self::Cvd => "CVD",
+            Self::CrossVenueDislocationBps => "Cross-Venue (bps)",
+            Self::NewsCount5m => "News (5m)",
+            Self::NewsCount15m => "News (15m)",
+            Self::NewsVelocity => "News Velocity %",
+            Self::NewsSources15m => "News Sources (15m)",
+            Self::StreamAgeMs => "Stream Age (ms)",
         }
     }
 }
@@ -149,6 +170,34 @@ struct MinuteBucket {
 }
 
 #[derive(Debug, Clone)]
+#[derive(Debug, Clone)]
+struct VenueState {
+    provider: providers::ProviderId,
+    venue: String,
+    last_price: Option<f64>,
+    bid: Option<f64>,
+    ask: Option<f64>,
+    day_volume: f64,
+    last_event_ms: i64,
+    last_sequence: Option<u64>,
+}
+
+impl VenueState {
+    fn new(provider: providers::ProviderId, venue: &str, now: i64) -> Self {
+        Self {
+            provider,
+            venue: venue.to_string(),
+            last_price: None,
+            bid: None,
+            ask: None,
+            day_volume: 0.0,
+            last_event_ms: now,
+            last_sequence: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 struct SecurityState {
     symbol: String,
     issue_type: IssueType,
@@ -161,6 +210,14 @@ struct SecurityState {
     market_cap: Option<f64>,
     last_updated_ms: i64,
     minute_buckets: VecDeque<MinuteBucket>,
+    venues: HashMap<String, VenueState>,
+    books: HashMap<String, OrderBookState>,
+    trade_count: u64,
+    buy_volume: f64,
+    sell_volume: f64,
+    cvd: f64,
+    news_events: VecDeque<(i64, String)>,
+    last_catalyst: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -171,6 +228,17 @@ struct Metrics {
     change_pct_5m: Option<f64>,
     change_pct_15m: Option<f64>,
     volume_1m: f64,
+    spread_bps: Option<f64>,
+    book_imbalance: Option<f64>,
+    liquidity_score: f64,
+    trade_imbalance: Option<f64>,
+    cvd: f64,
+    cross_venue_dislocation_bps: Option<f64>,
+    news_count_5m: f64,
+    news_count_15m: f64,
+    news_velocity: f64,
+    news_sources_15m: f64,
+    stream_age_ms: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -188,6 +256,17 @@ struct ScannerRow {
     shares_float: Option<f64>,
     shares_outstanding: Option<f64>,
     market_cap: Option<f64>,
+    spread_bps: Option<f64>,
+    book_imbalance: Option<f64>,
+    liquidity_score: f64,
+    trade_imbalance: Option<f64>,
+    cvd: f64,
+    cross_venue_dislocation_bps: Option<f64>,
+    news_count_5m: f64,
+    news_count_15m: f64,
+    news_velocity: f64,
+    news_sources_15m: f64,
+    stream_age_ms: f64,
     session: MarketSession,
     updated_at_ms: i64,
 }
@@ -240,6 +319,9 @@ struct AppState {
     presets: Arc<PresetStore>,
     providers: Arc<PublicProviderRouter>,
     news: Arc<NewsRouter>,
+    filings: Arc<SecFilingRouter>,
+    journal: Arc<EventJournal>,
+    streams: Arc<streams::StreamHealthStore>,
 }
 
 struct PresetStore {
@@ -259,6 +341,10 @@ fn default_columns() -> Vec<ColumnSpec> {
         Field::Price, Field::Change, Field::ChangePctPrevClose, Field::ChangePct1m,
         Field::ChangePct5m, Field::ChangePct15m, Field::DayVolume, Field::Volume1m,
         Field::SharesFloat, Field::SharesOutstanding, Field::MarketCap,
+        Field::SpreadBps, Field::BookImbalance, Field::LiquidityScore,
+        Field::TradeImbalance, Field::Cvd, Field::CrossVenueDislocationBps,
+        Field::NewsCount5m, Field::NewsCount15m, Field::NewsVelocity,
+        Field::NewsSources15m, Field::StreamAgeMs,
     ].into_iter().map(|field| ColumnSpec { field, width: 120, visible: true }).collect()
 }
 
@@ -342,6 +428,14 @@ impl SecurityState {
             market_cap: Some(cap),
             last_updated_ms: now,
             minute_buckets: VecDeque::with_capacity(20),
+            venues: HashMap::new(),
+            books: HashMap::new(),
+            trade_count: 0,
+            buy_volume: 0.0,
+            sell_volume: 0.0,
+            cvd: 0.0,
+            news_events: VecDeque::new(),
+            last_catalyst: None,
         }
     }
 
@@ -358,6 +452,14 @@ impl SecurityState {
             market_cap: None,
             last_updated_ms: now,
             minute_buckets: VecDeque::with_capacity(20),
+            venues: HashMap::new(),
+            books: HashMap::new(),
+            trade_count: 0,
+            buy_volume: 0.0,
+            sell_volume: 0.0,
+            cvd: 0.0,
+            news_events: VecDeque::new(),
+            last_catalyst: None,
         }
     }
 }
