@@ -44,7 +44,9 @@ SecurityState / CatalystEvent
 - Cross-venue price dislocation.
 - Stream freshness/staleness health.
 - Public Reddit RSS/JSON, Google News RSS and optional NewsAPI.
-- News URL deduplication and story clustering.
+- News URL deduplication and deterministic semantic story clustering.
+- Configurable issuer-specific RSS/Atom feeds.
+
 - Deterministic catalyst classification.
 - SEC EDGAR filing events.
 - Canadian SEDAR+/TSX disclosure discovery.
@@ -153,13 +155,18 @@ Replay uses the same scanner/book/news/catalyst state engine used live.
 
 ## Research
 
-The event fabric is designed for later:
-- historical event studies
-- catalyst-to-price reaction analysis
-- relative-volume baselines
-- order-flow studies
-- champion/challenger strategy evaluation
-- small-model evidence summarization
+The event fabric is designed for downstream research without changing scanner
+state:
+
+- JSONL remains the authoritative append-oriented journal.
+- DuckDB/Parquet materialization is benchmarked outside the live hot path.
+- Historical event studies can query the same normalized records in columnar form.
+- Semantic story clusters can be used as research keys across providers.
+- Issuer-specific RSS/Atom feeds enter the same NewsArticle/event-journal path.
+- Historical relative-volume baselines.
+- Order-flow studies.
+- Champion/challenger strategy evaluation.
+- Small-model evidence summarization.
 
 ## Security
 
