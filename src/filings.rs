@@ -97,7 +97,7 @@ impl SecFilingRouter {
             .collect::<Vec<_>>();
 
         if tickers.is_empty() {
-            return;
+            return Vec::new();
         }
 
         let worker = stream::iter(tickers)
