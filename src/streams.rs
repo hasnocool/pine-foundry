@@ -295,6 +295,61 @@ async fn ensure_crypto_symbol(
     .await;
 }
 
+async fn resync_book(state: &AppState, symbol: &str, provider: providers::ProviderId) {
+    let (bids, asks, sequence) = match provider {
+        providers::ProviderId::Binance => {
+            let Ok(value) = state.providers.binance_depth(symbol, 100).await else { return; };
+            (
+                parse_levels(value.get("bids")),
+                parse_levels(value.get("asks")),
+                as_u64(value.get("lastUpdateId")),
+            )
+        }
+        providers::ProviderId::Kraken => {
+            let Ok(value) = state.providers.kraken_depth(symbol).await else { return; };
+            let Some(result) = value.get("result").and_then(Value::as_object) else { return; };
+            let Some(book) = result.values().next() else { return; };
+            (
+                parse_levels(book.get("bids")),
+                parse_levels(book.get("asks")),
+                None,
+            )
+        }
+        providers::ProviderId::Coinbase => {
+            let product = coinbase_product(symbol);
+            let Ok(value) = state.providers.coinbase_book(&product).await else { return; };
+            (
+                parse_levels(value.get("bids")),
+                parse_levels(value.get("asks")),
+                as_u64(value.get("sequence")),
+            )
+        }
+        _ => return,
+    };
+
+    if bids.is_empty() && asks.is_empty() {
+        return;
+    }
+
+    let ts_ms = now_ms();
+    let _ = ingest_book(
+        state,
+        symbol.to_string(),
+        provider,
+        match provider {
+            providers::ProviderId::Binance => "Binance",
+            providers::ProviderId::Kraken => "Kraken",
+            providers::ProviderId::Coinbase => "Coinbase",
+            _ => "Crypto",
+        }.to_string(),
+        sequence,
+        true,
+        bids,
+        asks,
+        ts_ms,
+    ).await;
+}
+
 async fn ingest_crypto_trade(
     state: &AppState,
     symbol: String,
@@ -406,7 +461,7 @@ async fn run_binance(state: AppState) {
                                 let bids = parse_levels(data.get("b").or_else(|| data.get("bids")));
                                 let asks = parse_levels(data.get("a").or_else(|| data.get("asks")));
                                 state.streams.book("binance", ts_ms, sequence).await;
-                                ingest_book(
+                                let _ = ingest_book(
                                     &state,
                                     symbol,
                                     providers::ProviderId::Binance,
@@ -416,8 +471,7 @@ async fn run_binance(state: AppState) {
                                     bids,
                                     asks,
                                     ts_ms,
-                                )
-                                .await;
+                                ).await;
                             }
                         }
                         Ok(Message::Ping(payload)) => {
@@ -561,9 +615,9 @@ async fn run_kraken(state: AppState) {
                                     let bids = parse_object_levels(book.get("bids"), "price", "qty");
                                     let asks = parse_object_levels(book.get("asks"), "price", "qty");
                                     state.streams.book("kraken", ts_ms, None).await;
-                                    ingest_book(
+                                    let accepted = ingest_book(
                                         &state,
-                                        symbol,
+                                        symbol.clone(),
                                         providers::ProviderId::Kraken,
                                         "Kraken".to_string(),
                                         None,
@@ -571,8 +625,10 @@ async fn run_kraken(state: AppState) {
                                         bids,
                                         asks,
                                         ts_ms,
-                                    )
-                                    .await;
+                                    ).await;
+                                    if !snapshot && !accepted {
+                                        resync_book(&state, &symbol, providers::ProviderId::Kraken).await;
+                                    }
                                 }
                             }
                         }
@@ -736,9 +792,9 @@ async fn run_coinbase(state: AppState) {
                                         }
                                         let ts_ms = timestamp_ms(event.get("event_time"));
                                         state.streams.book("coinbase", ts_ms, sequence).await;
-                                        ingest_book(
+                                        let accepted = ingest_book(
                                             &state,
-                                            symbol,
+                                            symbol.clone(),
                                             providers::ProviderId::Coinbase,
                                             "Coinbase".to_string(),
                                             sequence,
@@ -746,8 +802,10 @@ async fn run_coinbase(state: AppState) {
                                             bids,
                                             asks,
                                             ts_ms,
-                                        )
-                                        .await;
+                                        ).await;
+                                        if !snapshot && !accepted {
+                                            resync_book(&state, &symbol, providers::ProviderId::Coinbase).await;
+                                        }
                                     }
                                 }
                             }
