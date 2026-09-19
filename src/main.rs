@@ -637,6 +637,9 @@ fn current_book_metrics(s: &SecurityState) -> BookMetrics {
     let mut fallback: Option<&OrderBookState> = None;
 
     for (key, book) in &s.books {
+        if !book.valid {
+            continue;
+        }
         if fallback.is_none() {
             fallback = Some(book);
         }
