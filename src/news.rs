@@ -699,6 +699,8 @@ fn parse_reddit_json(
                         .unwrap_or_default()
                 }),
                 published_at_ms: created_ms,
+                event_type: String::new(),
+                cluster_id: String::new(),
             })
         })
         .collect()
@@ -753,6 +755,8 @@ fn parse_newsapi_json(
                 subreddit: None,
                 published_at_ms: article.published_at.as_deref().and_then(parse_date_ms),
                 published_at: article.published_at,
+                event_type: String::new(),
+                cluster_id: String::new(),
             })
         })
         .collect()
@@ -948,6 +952,8 @@ mod tests {
             subreddit: None,
             published_at: None,
             published_at_ms: Some(2),
+            event_type: String::new(),
+            cluster_id: String::new(),
         };
         let second = NewsArticle { id: "b".into(), provider: "two".into(), ..first.clone() };
         assert_eq!(dedupe_and_sort(vec![first, second]).len(), 1);
