@@ -63,24 +63,37 @@ impl OrderBookState {
         sequence: Option<u64>,
         ts_ms: i64,
     ) -> bool {
-        let mut gap = false;
-        if let (Some(previous), Some(current)) = (self.sequence, sequence) {
-            if current <= previous {
+        self.apply_update_range(bids, asks, sequence, sequence, ts_ms)
+    }
+
+    pub fn apply_update_range(
+        &mut self,
+        bids: &[BookLevel],
+        asks: &[BookLevel],
+        first_sequence: Option<u64>,
+        last_sequence: Option<u64>,
+        ts_ms: i64,
+    ) -> bool {
+        if let (Some(first), Some(last)) = (first_sequence, last_sequence) {
+            if last < first {
                 return false;
             }
-            gap = current > previous.saturating_add(1);
-        }
-
-        if gap {
-            self.valid = false;
-            self.last_update_ms = ts_ms;
-            self.sequence = sequence;
-            return false;
+            if let Some(previous) = self.sequence {
+                if last <= previous {
+                    return false;
+                }
+                if first > previous.saturating_add(1) {
+                    self.valid = false;
+                    self.last_update_ms = ts_ms;
+                    self.sequence = Some(last);
+                    return false;
+                }
+            }
         }
 
         apply_levels(&mut self.bids, bids, BookSide::Bid);
         apply_levels(&mut self.asks, asks, BookSide::Ask);
-        self.sequence = sequence.or(self.sequence);
+        self.sequence = last_sequence.or(self.sequence);
         self.last_update_ms = ts_ms;
         self.valid = !self.bids.is_empty() && !self.asks.is_empty();
         true
