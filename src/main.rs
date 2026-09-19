@@ -1402,6 +1402,7 @@ async fn run_server() {
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
+    tokio::spawn(news::run_news_feed(state.news.clone()));
     match env::var("PINE_FOUNDRY_FEED").unwrap_or_else(|_| "auto".into()).to_ascii_lowercase().as_str() {
         "mock" => {
             tokio::spawn(mock_feed(state.clone()));
@@ -1409,7 +1410,6 @@ async fn run_server() {
         _ => {
             tokio::spawn(live_feed(state.clone()));
             tokio::spawn(streams::run_crypto_websocket_feeds(state.clone()));
-            tokio::spawn(news::run_news_feed(state.news.clone()));
             tokio::spawn(live_fx_feed(state.clone()));
         }
     }
