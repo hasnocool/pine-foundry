@@ -128,6 +128,8 @@ fn default_visible() -> bool { true }
 struct UniverseSpec {
     #[serde(default)]
     issue_types: Vec<IssueType>,
+    #[serde(default)]
+    asset_classes: Vec<providers::AssetClass>,
     #[serde(default = "default_session")]
     session: MarketSession,
 }
@@ -201,6 +203,7 @@ impl VenueState {
 #[derive(Debug, Clone)]
 struct SecurityState {
     symbol: String,
+    asset_class: providers::AssetClass,
     issue_type: IssueType,
     session: MarketSession,
     last_price: f64,
@@ -374,7 +377,11 @@ fn default_columns() -> Vec<ColumnSpec> {
 fn base_definition(name: &str) -> ScanDefinition {
     ScanDefinition {
         name: name.to_string(),
-        universe: UniverseSpec { issue_types: vec![IssueType::CommonStock], session: MarketSession::Regular },
+        universe: UniverseSpec {
+            issue_types: vec![IssueType::CommonStock],
+            asset_classes: vec![providers::AssetClass::Equity],
+            session: MarketSession::Regular,
+        },
         filters: vec![],
         sort: SortSpec::default(),
         columns: default_columns(),
@@ -429,6 +436,56 @@ fn builtin_presets() -> Vec<Preset> {
     mb.sort = SortSpec { field: Field::ChangePct5m, direction: SortDirection::Desc };
     p.push(Preset { id: Uuid::from_u128(8), name: mb.name.clone(), builtin: true, version: 1, definition: mb });
 
+    let mut cm = ScanDefinition {
+        name: "Crypto Momentum".to_string(),
+        universe: UniverseSpec {
+            issue_types: vec![IssueType::Other],
+            asset_classes: vec![providers::AssetClass::Crypto],
+            session: MarketSession::Regular,
+        },
+        filters: vec![
+            between(Field::ChangePct5m, Some(0.5), None),
+            between(Field::Volume1m, Some(1.0), None),
+            between(Field::TradeImbalance, Some(0.05), None),
+        ],
+        sort: SortSpec { field: Field::ChangePct5m, direction: SortDirection::Desc },
+        columns: default_columns(),
+        version: 1,
+    };
+    p.push(Preset { id: Uuid::from_u128(10), name: cm.name.clone(), builtin: true, version: 1, definition: cm });
+
+    let mut co = ScanDefinition {
+        name: "Crypto Order Flow".to_string(),
+        universe: UniverseSpec {
+            issue_types: vec![IssueType::Other],
+            asset_classes: vec![providers::AssetClass::Crypto],
+            session: MarketSession::Regular,
+        },
+        filters: vec![
+            between(Field::BookImbalance, Some(0.10), None),
+            between(Field::TradeImbalance, Some(0.10), None),
+            between(Field::LiquidityScore, Some(1.0), None),
+        ],
+        sort: SortSpec { field: Field::BookImbalance, direction: SortDirection::Desc },
+        columns: default_columns(),
+        version: 1,
+    };
+    p.push(Preset { id: Uuid::from_u128(11), name: co.name.clone(), builtin: true, version: 1, definition: co });
+
+    let mut fx = ScanDefinition {
+        name: "FX Momentum".to_string(),
+        universe: UniverseSpec {
+            issue_types: vec![IssueType::Other],
+            asset_classes: vec![providers::AssetClass::Fx],
+            session: MarketSession::Regular,
+        },
+        filters: vec![],
+        sort: SortSpec { field: Field::Price, direction: SortDirection::Asc },
+        columns: default_columns(),
+        version: 1,
+    };
+    p.push(Preset { id: Uuid::from_u128(12), name: fx.name.clone(), builtin: true, version: 1, definition: fx });
+
     let mut em = base_definition("Extended Movers");
     em.filters = vec![between(Field::ChangePct15m, Some(3.0), None), between(Field::Volume1m, Some(10_000.0), None)];
     em.sort = SortSpec { field: Field::ChangePct15m, direction: SortDirection::Desc };
@@ -441,6 +498,7 @@ impl SecurityState {
     fn new(symbol: &str, price: f64, float: f64, outstanding: f64, cap: f64, now: i64) -> Self {
         Self {
             symbol: symbol.to_string(),
+            asset_class: providers::AssetClass::Equity,
             issue_type: IssueType::CommonStock,
             session: MarketSession::Regular,
             last_price: price,
@@ -465,6 +523,7 @@ impl SecurityState {
     fn blank(symbol: &str, price: f64, session: MarketSession, now: i64) -> Self {
         Self {
             symbol: symbol.to_string(),
+            asset_class: providers::AssetClass::Equity,
             issue_type: IssueType::CommonStock,
             session,
             last_price: price,
@@ -703,6 +762,7 @@ fn crypto_primary_provider() -> String {
 }
 
 fn matches_scan(def: &ScanDefinition, s: &SecurityState) -> bool {
+    if !def.universe.asset_classes.is_empty() && !def.universe.asset_classes.contains(&s.asset_class) { return false; }
     if !def.universe.issue_types.is_empty() && !def.universe.issue_types.contains(&s.issue_type) { return false; }
     if def.universe.session != MarketSession::Closed && def.universe.session != s.session { return false; }
 
@@ -1488,6 +1548,7 @@ async fn ingest_public_quote(s: &AppState, quote: PublicQuote) {
             .or_insert_with(|| SecurityState::blank(&symbol, quote.price, session, ts_ms));
         let old_volume = state.day_volume;
 
+        state.asset_class = quote.asset_class;
         state.issue_type = match quote.issue_type {
             "common_stock" => IssueType::CommonStock,
             "etf" => IssueType::Etf,
