@@ -2338,6 +2338,7 @@ async fn run_replay(date: String) {
                     symbol,
                     parse_provider_id(record.provider.as_deref()),
                     record.venue.unwrap_or_else(|| "replay".to_string()),
+                    record.payload.get("first_sequence").and_then(|value| value.as_u64()),
                     record.sequence,
                     snapshot,
                     bids,
