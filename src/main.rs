@@ -830,6 +830,15 @@ fn apply_event(
             s.last_updated_ms = *ts_ms;
             minute_update(s, *ts_ms, *price, 0.0);
             update_venue(s, provider, venue, Some(*price), None, None, None, *ts_ms, sequence);
+            let crypto_provider = matches!(
+                provider,
+                providers::ProviderId::Binance
+                    | providers::ProviderId::Kraken
+                    | providers::ProviderId::Coinbase
+            );
+            if !crypto_provider || crypto_primary_provider() == provider.as_str() {
+                s.last_price = *price;
+            }
         }
         MarketEvent::Trade { ts_ms, price, size, session, .. } => {
             s.session = *session;
@@ -849,6 +858,15 @@ fn apply_event(
             }
             minute_update(s, *ts_ms, *price, *size);
             update_venue(s, provider, venue, Some(*price), None, None, None, *ts_ms, sequence);
+            let crypto_provider = matches!(
+                provider,
+                providers::ProviderId::Binance
+                    | providers::ProviderId::Kraken
+                    | providers::ProviderId::Coinbase
+            );
+            if !crypto_provider || crypto_primary_provider() == provider.as_str() {
+                s.last_price = *price;
+            }
         }
         MarketEvent::Reference { ts_ms, issue_type, shares_float, shares_outstanding, market_cap, previous_close, day_volume, .. } => {
             s.last_updated_ms = *ts_ms;
