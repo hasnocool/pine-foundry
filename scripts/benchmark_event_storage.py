@@ -143,7 +143,7 @@ def input_relation(paths: list[Path], events_dir: Path, pattern: str) -> str:
     if len(paths) == len(discover_files(events_dir, pattern, 0)):
         return f"read_ndjson_auto('{input_glob(events_dir, pattern)}')"
     quoted = ", ".join(f"'{sql_path(path)}'" for path in paths)
-    return f"read_ndjson_auto([{quoted}], union_by_name=true)
+    return f"read_ndjson_auto([{quoted}], union_by_name=true)"
 
 
 def main() -> int:
