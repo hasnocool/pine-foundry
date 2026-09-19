@@ -357,24 +357,30 @@ impl NewsRouter {
             return;
         }
 
-        let mut cache = self.cache.write().await;
-        let mut seen = cache.iter().map(|item| item.id.clone()).collect::<HashSet<_>>();
-        for article in articles {
-            if seen.insert(article.id.clone()) {
-                cache.push(article.clone());
+        let new_articles = {
+            let mut cache = self.cache.write().await;
+            let mut seen = cache.iter().map(|item| item.id.clone()).collect::<HashSet<_>>();
+            let mut new_articles = Vec::new();
+            for article in articles {
+                if seen.insert(article.id.clone()) {
+                    cache.push(article.clone());
+                    new_articles.push(article.clone());
+                }
             }
-        }
 
-        cache.sort_by(|a, b| b.published_at_ms.cmp(&a.published_at_ms));
-        update_clusters_locked(&self.clusters, articles).await;
-        let max_items = env::var("PINE_FOUNDRY_NEWS_CACHE_SIZE")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(500)
-            .clamp(50, 10_000);
-        if cache.len() > max_items {
-            cache.truncate(max_items);
-        }
+            cache.sort_by(|a, b| b.published_at_ms.cmp(&a.published_at_ms));
+            let max_items = env::var("PINE_FOUNDRY_NEWS_CACHE_SIZE")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(500)
+                .clamp(50, 10_000);
+            if cache.len() > max_items {
+                cache.truncate(max_items);
+            }
+            new_articles
+        };
+
+        update_clusters_locked(&self.clusters, &new_articles).await;
     }
 
     async fn get_text(
