@@ -132,6 +132,24 @@ Returned articles are normalized into the same NewsArticle/CatalystEvent path an
 
 ## News
 
+### Issuer-specific RSS/Atom
+
+Issuer-specific feeds can be configured through:
+
+~~~text
+PINE_FOUNDRY_ISSUER_FEEDS=TICKER=https://issuer.example/feed.xml;TICKER2=https://issuer.example/atom.xml
+~~~
+
+Configured feeds use the existing RSS/Atom parser, URL deduplication, catalyst
+classification, semantic story clustering and JSONL event journal. This is
+intentionally configuration-driven so Pine Foundry does not depend on
+undocumented issuer endpoints.
+
+Documented source families include SEC EDGAR company-search RSS, issuer
+Investor Relations RSS/Atom when published by the issuer, GlobeNewswire
+direct-from-source press-release feeds, and Business Wire issuer-page RSS
+links. See docs/issuer-feeds.md.
+
 ### Reddit
 
 Global search RSS:
