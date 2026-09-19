@@ -2009,7 +2009,6 @@ pub(crate) async fn ingest_filing_events(s: &AppState, filings: &[FilingEvent]) 
                 reaction_15m_pct: None,
             });
             while state.catalysts.len() > 100 { state.catalysts.pop_front(); }
-            state.last_updated_ms = now.max(state.last_updated_ms);
             updates.push(state.clone());
         }
     }
