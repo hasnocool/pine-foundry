@@ -244,6 +244,7 @@ struct SecurityState {
     shares_outstanding: Option<f64>,
     market_cap: Option<f64>,
     last_updated_ms: i64,
+    asof_ms: i64,
     replay_mode: bool,
     minute_buckets: VecDeque<MinuteBucket>,
     venues: HashMap<String, VenueState>,
@@ -601,6 +602,7 @@ impl SecurityState {
             shares_outstanding: Some(outstanding),
             market_cap: Some(cap),
             last_updated_ms: now,
+            asof_ms: now,
             replay_mode: false,
             minute_buckets: VecDeque::with_capacity(20),
             venues: HashMap::new(),
@@ -726,7 +728,7 @@ fn cross_venue_dislocation_bps(s: &SecurityState) -> Option<f64> {
 
 fn metric_now(s: &SecurityState) -> i64 {
     if s.replay_mode {
-        s.last_updated_ms
+        s.asof_ms
     } else {
         now_ms()
     }
@@ -1183,6 +1185,13 @@ fn apply_event(
             if let Some(volume) = day_volume { s.day_volume = *volume; }
         }
     }
+
+    let event_ts = match event {
+        MarketEvent::Quote { ts_ms, .. }
+        | MarketEvent::Trade { ts_ms, .. }
+        | MarketEvent::Reference { ts_ms, .. } => *ts_ms,
+    };
+    s.asof_ms = s.asof_ms.max(event_ts);
 }
 
 impl ScanRuntime {
@@ -1873,6 +1882,7 @@ async fn ingest_public_quote(s: &AppState, quote: PublicQuote) {
             0.0
         };
         state.last_updated_ms = ts_ms;
+        state.asof_ms = state.asof_ms.max(ts_ms);
         minute_update(state, ts_ms, quote.price, volume_delta);
         update_venue(
             state,
@@ -1992,12 +2002,16 @@ pub(crate) async fn ingest_filing_events(s: &AppState, filings: &[FilingEvent]) 
         for filing in filings {
             let symbol = filing.ticker.to_ascii_uppercase();
             let Some(state) = market.get_mut(&symbol) else { continue; };
+            let filing_timestamp = filing.acceptance_datetime.as_deref()
+                .and_then(news::parse_date_for_state)
+                .unwrap_or(now);
             state.news_events.push_back((
-                filing.acceptance_datetime.as_deref()
-                    .and_then(news::parse_date_for_state)
-                    .unwrap_or(now),
+                filing_timestamp,
                 format!("SEC:{}", filing.form),
             ));
+            if state.replay_mode {
+                state.asof_ms = state.asof_ms.max(filing_timestamp);
+            }
             while let Some((timestamp, _)) = state.news_events.front() {
                 if *timestamp < now - 60 * 60_000 {
                     state.news_events.pop_front();
@@ -2049,6 +2063,9 @@ pub(crate) async fn ingest_news_articles(s: &AppState, articles: &[NewsArticle])
             let source = article.source.clone().unwrap_or_else(|| article.provider.clone());
 
             state.news_events.push_back((timestamp, source));
+            if state.replay_mode {
+                state.asof_ms = state.asof_ms.max(timestamp);
+            }
             while let Some((timestamp, _)) = state.news_events.front() {
                 if *timestamp < now - 60 * 60_000 {
                     state.news_events.pop_front();
