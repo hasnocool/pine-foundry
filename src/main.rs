@@ -244,6 +244,7 @@ struct SecurityState {
     shares_outstanding: Option<f64>,
     market_cap: Option<f64>,
     last_updated_ms: i64,
+    replay_mode: bool,
     minute_buckets: VecDeque<MinuteBucket>,
     venues: HashMap<String, VenueState>,
     books: HashMap<String, OrderBookState>,
@@ -599,6 +600,7 @@ impl SecurityState {
             shares_outstanding: Some(outstanding),
             market_cap: Some(cap),
             last_updated_ms: now,
+            replay_mode: false,
             minute_buckets: VecDeque::with_capacity(20),
             venues: HashMap::new(),
             books: HashMap::new(),
@@ -625,6 +627,7 @@ impl SecurityState {
             shares_outstanding: None,
             market_cap: None,
             last_updated_ms: now,
+            replay_mode: false,
             minute_buckets: VecDeque::with_capacity(20),
             venues: HashMap::new(),
             books: HashMap::new(),
@@ -720,8 +723,16 @@ fn cross_venue_dislocation_bps(s: &SecurityState) -> Option<f64> {
     (mid > 0.0).then_some((max - min) / mid * 10_000.0)
 }
 
+fn metric_now(s: &SecurityState) -> i64 {
+    if s.replay_mode {
+        s.last_updated_ms
+    } else {
+        now_ms()
+    }
+}
+
 fn news_metrics(s: &SecurityState) -> (f64, f64, f64, f64) {
-    let now = now_ms();
+    let now = metric_now(s);
     let five = now - 5 * 60_000;
     let fifteen = now - 15 * 60_000;
     let hour = now - 60 * 60_000;
@@ -838,7 +849,7 @@ fn metrics(s: &SecurityState) -> Metrics {
         news_count_15m,
         news_velocity,
         news_sources_15m,
-        stream_age_ms: (now_ms() - s.last_updated_ms).max(0) as f64,
+        stream_age_ms: (metric_now(s) - s.last_updated_ms).max(0) as f64,
         relative_volume_15m,
         volatility_15m_pct,
         executable_buy_1000: book.executable_buy_1000,
@@ -2493,6 +2504,12 @@ async fn run_replay(date: String) {
         journal,
         streams: Arc::new(streams::StreamHealthStore::new()),
     };
+    {
+        let mut market = state.market.write().await;
+        for state in market.values_mut() {
+            state.replay_mode = true;
+        }
+    }
 
     let mut counts = HashMap::<String, usize>::new();
     for record in records {
