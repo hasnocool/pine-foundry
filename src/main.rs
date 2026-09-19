@@ -855,6 +855,89 @@ async fn api_binance_depth(
         .map_err(internal_error)
 }
 
+
+#[derive(Debug, Deserialize)]
+struct NewsSearchQuery {
+    q: String,
+    ticker: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn api_news_search(
+    State(s): State<AppState>,
+    Query(query): Query<NewsSearchQuery>,
+) -> Result<Json<Vec<NewsArticle>>, (StatusCode, String)> {
+    s.news
+        .search_all(
+            &query.q,
+            query.ticker.as_deref(),
+            query.limit.unwrap_or(25),
+        )
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_news_ticker(
+    State(s): State<AppState>,
+    Path(ticker): Path<String>,
+) -> Result<Json<Vec<NewsArticle>>, (StatusCode, String)> {
+    s.news
+        .search_ticker(&ticker, 25)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_news_reddit(
+    State(s): State<AppState>,
+    Query(query): Query<NewsSearchQuery>,
+) -> Result<Json<Vec<NewsArticle>>, (StatusCode, String)> {
+    let mut articles = s
+        .news
+        .reddit_rss_search(&query.q, query.ticker.as_deref(), query.limit.unwrap_or(25))
+        .await
+        .map_err(internal_error)?;
+    if let Ok(mut json_articles) = s
+        .news
+        .reddit_json_search(&query.q, query.ticker.as_deref(), query.limit.unwrap_or(25))
+        .await
+    {
+        articles.append(&mut json_articles);
+    }
+    Ok(Json(articles))
+}
+
+async fn api_news_google(
+    State(s): State<AppState>,
+    Query(query): Query<NewsSearchQuery>,
+) -> Result<Json<Vec<NewsArticle>>, (StatusCode, String)> {
+    s.news
+        .google_news_search(&query.q, query.ticker.as_deref(), query.limit.unwrap_or(25))
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_news_newsapi(
+    State(s): State<AppState>,
+    Query(query): Query<NewsSearchQuery>,
+) -> Result<Json<Vec<NewsArticle>>, (StatusCode, String)> {
+    s.news
+        .newsapi_search(&query.q, query.ticker.as_deref(), query.limit.unwrap_or(25))
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_news_cache(State(s): State<AppState>) -> Json<Vec<NewsArticle>> {
+    Json(s.news.cache().await)
+}
+
+async fn api_news_health(State(s): State<AppState>) -> Json<Vec<NewsProviderHealth>> {
+    Json(s.news.health().await)
+}
+
 async fn list_presets(State(s): State<AppState>) -> Json<Vec<Preset>> { Json(s.presets.list().await) }
 
 async fn create_preset(State(s): State<AppState>, Json(p): Json<Preset>) -> Result<Json<Preset>, (StatusCode, String)> {
