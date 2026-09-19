@@ -1732,7 +1732,7 @@ pub(crate) async fn ingest_book(
             book.replace(bids.clone(), asks.clone(), sequence, ts_ms);
             true
         } else {
-            book.apply_update(&bids, &asks, sequence, ts_ms)
+            book.apply_update_range(&bids, &asks, first_sequence, sequence, ts_ms)
         };
 
         let book_metrics = book.metrics();
@@ -1755,6 +1755,7 @@ pub(crate) async fn ingest_book(
         "symbol": symbol,
         "provider": provider,
         "venue": venue,
+        "first_sequence": first_sequence,
         "sequence": sequence,
         "snapshot": snapshot,
         "bids": bids,
