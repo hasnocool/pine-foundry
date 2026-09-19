@@ -1854,7 +1854,11 @@ async fn ingest_public_quote(s: &AppState, quote: PublicQuote) {
             state.day_volume = volume.max(0.0);
         }
 
-        let volume_delta = (state.day_volume - old_volume).max(0.0);
+        let volume_delta = if old_volume > 0.0 {
+            (state.day_volume - old_volume).max(0.0)
+        } else {
+            0.0
+        };
         state.last_updated_ms = ts_ms;
         minute_update(state, ts_ms, quote.price, volume_delta);
         update_venue(
