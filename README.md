@@ -66,6 +66,20 @@ Then open the Vite URL shown by the dev server.
 
 `PINE_FOUNDRY_DATA_DIR` defaults to `data` and stores custom presets in `presets.json`.
 
+## Keyless live market-data stack
+
+The default server uses an asynchronous public-provider chain:
+
+1. TradingView America bulk scanner.
+2. Yahoo Finance Spark batch quote fallback.
+3. Nasdaq public realtime quote fallback.
+
+The repository also exposes Yahoo chart, Nasdaq reference data, TradingView symbol metrics, and Binance public ticker/candles/order-book routes. No API keys are required for these routes.
+
+Configure live polling with PINE_FOUNDRY_FEED, PINE_FOUNDRY_POLL_SECS, PINE_FOUNDRY_TV_PAGE_SIZE, PINE_FOUNDRY_TV_MAX_ROWS, and PINE_FOUNDRY_SESSION.
+
+See docs/providers.md for the complete route catalog and limitations.
+
 ## Architecture
 
 ```
