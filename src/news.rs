@@ -389,7 +389,8 @@ impl NewsRouter {
                 Err(error) => eprintln!("news feed: {error}"),
             }
         }
-        let articles = dedupe_and_sort(collected);
+        let mut articles = dedupe_and_sort(collected);
+        self.cache_articles(&mut articles).await;
         let mut seen = self.processed_news.write().await;
         let mut fresh = Vec::new();
         for article in articles {
