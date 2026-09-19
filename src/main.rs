@@ -1913,7 +1913,8 @@ async fn run_server() {
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
-    tokio::spawn(news::run_news_feed(state.news.clone()));
+    tokio::spawn(news::run_news_feed(state.news.clone(), state.clone()));
+    tokio::spawn(filings::run_sec_feed(state.filings.clone()));
     match env::var("PINE_FOUNDRY_FEED").unwrap_or_else(|_| "auto".into()).to_ascii_lowercase().as_str() {
         "mock" => {
             tokio::spawn(mock_feed(state.clone()));
@@ -1928,6 +1929,120 @@ async fn run_server() {
     println!("Pine Foundry listening on http://{addr}");
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
     axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await.expect("server");
+}
+
+
+fn parse_provider_id(value: Option<&str>) -> providers::ProviderId {
+    match value.unwrap_or_default().to_ascii_lowercase().as_str() {
+        "tradingview" => providers::ProviderId::TradingView,
+        "yahoo" => providers::ProviderId::Yahoo,
+        "nasdaq" => providers::ProviderId::Nasdaq,
+        "kraken" => providers::ProviderId::Kraken,
+        "coinbase" => providers::ProviderId::Coinbase,
+        "frankfurter" => providers::ProviderId::Frankfurter,
+        "bank_of_canada" => providers::ProviderId::BankOfCanada,
+        _ => providers::ProviderId::Binance,
+    }
+}
+
+async fn run_replay(date: String) {
+    let data_dir = PathBuf::from(env::var("PINE_FOUNDRY_DATA_DIR").unwrap_or_else(|_| "data".into()));
+    let records = match EventJournal::read_day(&data_dir.join("events"), &date).await {
+        Ok(records) => records,
+        Err(error) => {
+            eprintln!("replay: {error}");
+            return;
+        }
+    };
+
+    let journal = Arc::new(EventJournal::spawn(data_dir.join("replay-events")));
+    let state = AppState {
+        market: Arc::new(RwLock::new(seed_market())),
+        scans: Arc::new(RwLock::new(HashMap::new())),
+        presets: Arc::new(PresetStore::load(data_dir.join("replay-presets.json")).await),
+        providers: Arc::new(PublicProviderRouter::new().expect("public provider client")),
+        news: Arc::new(NewsRouter::new().expect("public news client")),
+        filings: Arc::new(SecFilingRouter::new(journal.clone()).expect("SEC client")),
+        journal,
+        streams: Arc::new(streams::StreamHealthStore::new()),
+    };
+
+    let mut counts = HashMap::<String, usize>::new();
+    for record in records {
+        *counts.entry(record.kind.clone()).or_default() += 1;
+        match record.kind.as_str() {
+            "trade" | "quote" | "reference" => {
+                if let Ok(event) = serde_json::from_value::<MarketEvent>(record.payload) {
+                    ingest(
+                        &state,
+                        event,
+                        parse_provider_id(record.provider.as_deref()),
+                        record.venue.unwrap_or_else(|| "replay".to_string()),
+                        record.sequence,
+                        None,
+                    )
+                    .await;
+                }
+            }
+            "book" => {
+                let symbol = record
+                    .payload
+                    .get("symbol")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let bids = serde_json::from_value::<Vec<BookLevel>>(
+                    record.payload.get("bids").cloned().unwrap_or_else(|| serde_json::json!([])),
+                )
+                .unwrap_or_default();
+                let asks = serde_json::from_value::<Vec<BookLevel>>(
+                    record.payload.get("asks").cloned().unwrap_or_else(|| serde_json::json!([])),
+                )
+                .unwrap_or_default();
+                let ts_ms = record.payload.get("ts_ms").and_then(|value| value.as_i64()).unwrap_or(record.received_at_ms);
+                let snapshot = record.payload.get("snapshot").and_then(|value| value.as_bool()).unwrap_or(true);
+                ingest_book(
+                    &state,
+                    symbol,
+                    parse_provider_id(record.provider.as_deref()),
+                    record.venue.unwrap_or_else(|| "replay".to_string()),
+                    record.sequence,
+                    snapshot,
+                    bids,
+                    asks,
+                    ts_ms,
+                )
+                .await;
+            }
+            "news" => {
+                if let Ok(article) = serde_json::from_value::<NewsArticle>(record.payload) {
+                    ingest_news_articles(&state, &[article]).await;
+                }
+            }
+            "filing" => {}
+            _ => {}
+        }
+    }
+
+    let mut rows = state.market.read().await.values().map(row).collect::<Vec<_>>();
+    rows.sort_by(|a, b| b.change_pct_5m.partial_cmp(&a.change_pct_5m).unwrap_or(std::cmp::Ordering::Equal));
+    println!("replayed {date}: {} records", counts.values().sum::<usize>());
+    for (kind, count) in counts {
+        println!("{kind}: {count}");
+    }
+    println!("top symbols:");
+    for item in rows.into_iter().take(20) {
+        println!(
+            "{} price={} chg5m={:?} spread_bps={:?} book_imbalance={:?} news15m={} stream_age_ms={}",
+            item.symbol,
+            item.price,
+            item.change_pct_5m,
+            item.spread_bps,
+            item.book_imbalance,
+            item.news_count_15m,
+            item.stream_age_ms
+        );
+    }
 }
 
 fn print_presets() {
@@ -1948,6 +2063,7 @@ async fn main() {
         Command::Serve => run_server().await,
         Command::Presets => print_presets(),
         Command::Providers => print_providers(),
+        Command::Replay { date } => run_replay(date).await,
     }
 }
 
