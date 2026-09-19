@@ -18,86 +18,150 @@ It is an original implementation inspired by the public workflow of desktop equi
 - WebSocket snapshot + delta + resync protocol.
 - REST API for scans and presets.
 - Three-window-ready backend.
-- Working browser UI with filter editing, preset switching, column visibility and sorting.
-- Deterministic synthetic feed so the system runs without a market-data API.
-- CLI for listing builtin presets.
+- Browser UI with filter editing, preset switching, column visibility and sorting.
+- Deterministic synthetic feed for offline development.
+- Public-provider fallback stack for U.S., Canadian, crypto and FX markets.
+- Event-driven public crypto trade streams from Binance, Kraken and Coinbase.
+- Unified news aggregation from Reddit RSS, Reddit JSON, Google News RSS and NewsAPI.
+- Bounded local news cache and provider health metrics.
 - Local tests and validation only; **no GitHub Actions**.
 
 ## Quick start
 
-```bash
+~~~
+cp .env.example .env
+# Set NEWSAPI in .env when using NewsAPI.
 cargo fmt --all -- --check
 cargo check
 cargo test
 cargo run -- serve
-```
+~~~
 
 Server:
 
-```
+~~~text
 http://127.0.0.1:3000
-```
+~~~
 
 Health:
 
-```
+~~~
 curl http://127.0.0.1:3000/health
-```
+~~~
 
 List presets:
 
-```
+~~~
 cargo run -- presets
-```
+~~~
+
+List provider routes:
+
+~~~
+cargo run -- providers
+~~~
 
 Web client:
 
-```bash
+~~~
 cd web
 npm install
 npm run dev
-```
+~~~
 
 Then open the Vite URL shown by the dev server.
 
-## Configuration
+## Environment
 
-`PINE_FOUNDRY_ADDR` defaults to `127.0.0.1:3000`.
+Core:
 
-`PINE_FOUNDRY_DATA_DIR` defaults to `data` and stores custom presets in `presets.json`.
+~~~text
+PINE_FOUNDRY_ADDR=127.0.0.1:3000
+PINE_FOUNDRY_DATA_DIR=data
+PINE_FOUNDRY_FEED=auto
+~~~
 
-## Keyless live market-data stack
+Equity polling:
 
-The default server uses an asynchronous public-provider chain:
+~~~text
+PINE_FOUNDRY_POLL_SECS=5
+PINE_FOUNDRY_TV_PAGE_SIZE=5000
+PINE_FOUNDRY_TV_MAX_ROWS=20000
+PINE_FOUNDRY_SESSION=regular
+~~~
 
-1. TradingView America bulk scanner.
-2. Yahoo Finance Spark batch quote fallback.
-3. Nasdaq public realtime quote fallback.
+Crypto WebSockets:
 
-The repository also exposes Yahoo chart, Nasdaq reference data, TradingView symbol metrics, and Binance public ticker/candles/order-book routes. No API keys are required for these routes.
+~~~text
+PINE_FOUNDRY_CRYPTO_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
+PINE_FOUNDRY_CRYPTO_WS_RECONNECT_SECS=3
+~~~
 
-Configure live polling with PINE_FOUNDRY_FEED, PINE_FOUNDRY_POLL_SECS, PINE_FOUNDRY_TV_PAGE_SIZE, PINE_FOUNDRY_TV_MAX_ROWS, and PINE_FOUNDRY_SESSION.
+News:
 
-See docs/providers.md for the complete route catalog and limitations.
+~~~text
+NEWSAPI=
+PINE_FOUNDRY_NEWS_TICKERS=BTC,ETH,SOL
+PINE_FOUNDRY_NEWS_QUERIES=
+PINE_FOUNDRY_NEWS_POLL_SECS=60
+PINE_FOUNDRY_NEWS_LIMIT=25
+PINE_FOUNDRY_NEWS_LOOKBACK_HOURS=24
+PINE_FOUNDRY_NEWS_CONCURRENCY=4
+PINE_FOUNDRY_NEWS_CACHE_SIZE=500
+~~~
 
-## Expanded keyless live markets
+NEWSAPI is read from the process environment and sent in the X-Api-Key header. The credential is intentionally not stored in the repository.
 
-The default live runtime now runs independent feeds for:
+## Live crypto architecture
 
-- U.S. equities: TradingView America, Yahoo Finance, Nasdaq.
-- Canadian equities: TradingView Canada for TSX/TSXV plus Yahoo Canadian symbols.
-- Crypto: Binance, Kraken, Coinbase.
-- FX: Yahoo Finance FX, TradingView Forex, Frankfurter reference rates.
+~~~text
+Binance WS aggTrade ----\
+Kraken WS trade ----------> normalized MarketEvent::Trade
+Coinbase WS trades ------/            |
+                                      v
+                              SecurityState
+                                      |
+                                      v
+                         rolling 1m/5m/15m metrics
+                                      |
+                                      v
+                                ScanRuntime
+                                      |
+                         WebSocket scanner deltas
+~~~
 
-Default symbols:
+The three public crypto WebSockets run independently with reconnect loops. A provider disconnect does not stop the other streams or the equity/FX loops.
 
-    PINE_FOUNDRY_CRYPTO_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
-    PINE_FOUNDRY_FX_PAIRS=EURUSD=X,USDCAD=X,GBPUSD=X,USDJPY=X
+The stream layer is event-driven; the REST crypto endpoints remain available for snapshots, candles and order books.
 
-See docs/providers.md for route coverage, fallback behavior, normalization and provider limitations.
+## News architecture
+
+~~~text
+ticker/query
+    |
+    +--> Reddit search.rss
+    +--> Reddit search.json
+    +--> Google News RSS search
+    +--> NewsAPI /v2/everything
+                |
+                v
+        normalize + dedupe
+                |
+                v
+          bounded cache
+                |
+                +--> REST search endpoint
+                +--> ticker endpoint
+                +--> health endpoint
+~~~
+
+The automatic news worker refreshes configured tickers/queries independently from market-data loops. A failed news provider does not stop the scanner.
+
+See docs/providers.md, docs/news.md and docs/api.md for route coverage and limitations.
+
 ## Architecture
 
-```
+~~~text
 market provider
    |
    v
@@ -121,8 +185,8 @@ ScanRuntime membership
    |
    v
 browser scanner
-```
+~~~
 
 The production provider boundary should normalize quotes, trades, reference data, session changes, halt status and sequence information into the same event model used by the scanner.
 
-See [docs/master-spec.md](docs/master-spec.md) and [docs/development.md](docs/development.md).
+See docs/master-spec.md and docs/development.md.
