@@ -193,7 +193,6 @@ struct ScanDefinition {
 }
 fn default_version() -> u32 { 1 }
 
-#[derive(Debug, Clone)]
 #[derive(Debug, Clone, Default)]
 struct MinuteBucket {
     start_ms: i64,
