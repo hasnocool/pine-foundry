@@ -42,8 +42,10 @@ REST snapshots:
 - /api/v3/depth
 
 WebSocket:
-- Spot aggregate trade streams use wss://stream.binance.com:9443/stream with one or more lower-case SYMBOL@aggTrade streams.
-- Pine Foundry maps each trade to MarketEvent::Trade immediately.
+- wss://stream.binance.com:9443/stream
+- One or more lower-case SYMBOL@aggTrade streams.
+- Pine Foundry additionally consumes @depth5@100ms book snapshots.
+- REST /depth is used as the recovery snapshot if an incremental book sequence becomes invalid.
 
 ### Kraken
 
@@ -55,8 +57,9 @@ REST snapshots:
 
 WebSocket:
 - wss://ws.kraken.com/v2
-- Public trade channel with multiple subscribed symbols.
-- Pine Foundry consumes trade price, quantity and timestamp as MarketEvent::Trade.
+- Public trade channel.
+- Public book channel with configurable depth.
+- Book state is rebuilt from a snapshot when sequence continuity becomes invalid.
 
 ### Coinbase
 
@@ -68,15 +71,17 @@ REST snapshots:
 
 WebSocket:
 - wss://advanced-trade-ws.coinbase.com
-- Public market_trades subscription for configured products.
-- Pine Foundry consumes trade price, size and timestamp as MarketEvent::Trade and also subscribes to heartbeats.
+- Public market_trades.
+- Public level2.
+- Heartbeats are subscribed to alongside market data.
+- REST book recovery is used after sequence problems.
 
-WebSocket streams run independently and reconnect after disconnects. REST crypto routes remain available for snapshots, candles and books.
+WebSocket streams run independently and reconnect after disconnects. Each venue maintains its own price, freshness, sequence and book state. The configured crypto primary venue controls the canonical scanner last price.
 
 Important:
-- The streamed day volume starts from the first event Pine Foundry receives. It is not a historical exchange-day aggregate.
+- Streamed day volume starts from the first event Pine Foundry receives; it is not historical exchange-day volume.
 - No authenticated account or order routes are used.
-- Public schemas and availability can change without notice.
+- Public schemas and availability can change.
 
 ## FX
 
@@ -94,6 +99,37 @@ Bank of Canada:
 - GET https://www.bankofcanada.ca/valet/observations/{series}/json
 - Public keyless FX reference-data fallback.
 
+## Regulatory filings
+
+### SEC EDGAR
+
+- https://www.sec.gov/files/company_tickers.json
+- https://data.sec.gov/submissions/CIK##########.json
+- Submission history is normalized into FilingEvent records.
+- Filing types are classified into material event, reporting, registration, ownership and insider categories where possible.
+- A declared User-Agent is configurable through PINE_FOUNDRY_SEC_USER_AGENT.
+- The adapter polls only configured tickers through PINE_FOUNDRY_SEC_TICKERS.
+
+Pine Foundry uses small concurrency rather than crawling the entire filing corpus.
+
+### Canada / SEDAR+ and TSX disclosure discovery
+
+SEDAR+ provides a public searchable filing interface, but Pine Foundry deliberately does not rely on undocumented internal SEDAR+ JSON endpoints.
+
+Instead the Canadian disclosure adapter constructs public Google News RSS searches restricted to:
+- site:sedarplus.ca
+- site:sedarplus.ca/csa-party
+- site:tsx.com/en/news
+
+Configured tickers:
+
+~~~text
+PINE_FOUNDRY_CANADA_TICKERS=
+PINE_FOUNDRY_CANADA_POLL_SECS=300
+~~~
+
+Returned articles are normalized into the same NewsArticle/CatalystEvent path and journaled as canada_disclosure.
+
 ## News
 
 ### Reddit
@@ -104,14 +140,14 @@ Global search RSS:
 Global JSON:
 - GET https://www.reddit.com/search.json?q={encoded_query}&sort=new&limit={n}
 
-Pine Foundry attempts both. RSS is treated as the durable keyless path; JSON is an additional fast structured path when Reddit permits it from the client network.
+Pine Foundry attempts both. RSS is treated as the more durable keyless source; JSON is an additional structured source and may be unavailable or throttled.
 
 ### Google News
 
 Search RSS:
 - GET https://news.google.com/rss/search?q={encoded_query}&hl=en-CA&gl=CA&ceid=CA:en
 
-The RSS response is normalized into the same NewsArticle model as Reddit and NewsAPI.
+Used for broad news searches and for public Canadian disclosure discovery.
 
 ### NewsAPI
 
@@ -121,9 +157,11 @@ Everything:
 - NEWSAPI or NEWSAPI_KEY is read from the process environment.
 - The credential is sent with X-Api-Key and never stored in the repository.
 
-Pine Foundry defaults NewsAPI searches to a configurable recent lookback window with:
-- PINE_FOUNDRY_NEWS_LOOKBACK_HOURS
-- PINE_FOUNDRY_NEWS_LIMIT
+Local safety guards:
+- PINE_FOUNDRY_NEWSAPI_MIN_INTERVAL_SECS
+- PINE_FOUNDRY_NEWSAPI_DAILY_LIMIT
+
+These prevent the configured free/development API budget from being consumed by every ticker on every polling cycle.
 
 ## Unified news model
 
@@ -138,32 +176,38 @@ Each result includes:
 - author
 - subreddit when available
 - publication timestamp
+- catalyst event type
+- story-cluster ID
 
-Results are deduplicated by canonical URL and sorted newest first. A bounded in-memory cache retains recent results for API consumers.
+Results are deduplicated by canonical URL where possible and sorted newest first. Cross-provider story clustering normalizes important headline tokens and retains source/ticker counts.
 
-## Automatic news worker
+## Event and evidence layer
 
-Default:
+Market/news/filing events are persisted as JSONL records in:
 
 ~~~text
-PINE_FOUNDRY_NEWS_TICKERS=BTC,ETH,SOL
-PINE_FOUNDRY_NEWS_QUERIES=
-PINE_FOUNDRY_NEWS_POLL_SECS=60
-PINE_FOUNDRY_NEWS_LIMIT=25
-PINE_FOUNDRY_NEWS_LOOKBACK_HOURS=24
-PINE_FOUNDRY_NEWS_CONCURRENCY=4
-PINE_FOUNDRY_NEWS_CACHE_SIZE=500
+data/events/YYYY-MM-DD.jsonl
 ~~~
 
-For a custom ticker list, populate PINE_FOUNDRY_NEWS_TICKERS with comma-separated symbols. PINE_FOUNDRY_NEWS_QUERIES accepts additional free-form broad searches.
+The event journal is bounded by an asynchronous channel. Queue drops are exposed through:
+- GET /api/journal/health
 
-## Health
+Symbol evidence:
+- GET /api/evidence/:symbol
 
-Market provider health:
-- GET /health
-- GET /api/providers/health
+This joins:
+- venue state
+- order-book metrics
+- cross-venue dislocation
+- stream age
+- catalyst history
+- related news
 
-News provider health:
-- GET /api/news/health
+## Asset classes
 
-A failing news source is isolated from the market-data runtime. Search aggregation still returns whatever sources remain available.
+Scanner universes can restrict asset_classes to:
+- equity
+- crypto
+- fx
+
+Built-in crypto and FX presets use these boundaries so they do not accidentally enter the equity scanner universe.
