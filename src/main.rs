@@ -1614,6 +1614,42 @@ pub(crate) async fn ingest_book(
 }
 
 
+pub(crate) async fn ingest_filing_events(s: &AppState, filings: &[FilingEvent]) {
+    if filings.is_empty() {
+        return;
+    }
+
+    let now = now_ms();
+    let mut updates = Vec::new();
+    {
+        let mut market = s.market.write().await;
+        for filing in filings {
+            let symbol = filing.ticker.to_ascii_uppercase();
+            let Some(state) = market.get_mut(&symbol) else { continue; };
+            state.news_events.push_back((
+                filing.acceptance_datetime.as_deref()
+                    .and_then(news::parse_date_for_state)
+                    .unwrap_or(now),
+                format!("SEC:{}", filing.form),
+            ));
+            while let Some((timestamp, _)) = state.news_events.front() {
+                if *timestamp < now - 60 * 60_000 {
+                    state.news_events.pop_front();
+                } else {
+                    break;
+                }
+            }
+            state.last_catalyst = Some(filing.event_type.clone());
+            state.last_updated_ms = now.max(state.last_updated_ms);
+            updates.push(state.clone());
+        }
+    }
+
+    for state in updates {
+        publish_market_state(s, state).await;
+    }
+}
+
 pub(crate) async fn ingest_news_articles(s: &AppState, articles: &[NewsArticle]) {
     if articles.is_empty() {
         return;
@@ -2017,7 +2053,7 @@ async fn run_server() {
         .with_state(state.clone());
 
     tokio::spawn(news::run_news_feed(state.news.clone(), state.clone()));
-    tokio::spawn(filings::run_sec_feed(state.filings.clone()));
+    tokio::spawn(filings::run_sec_feed(state.filings.clone(), state.clone()));
     tokio::spawn(canada::run_canadian_disclosure_feed(state.canada.clone(), state.clone()));
     match env::var("PINE_FOUNDRY_FEED").unwrap_or_else(|_| "auto".into()).to_ascii_lowercase().as_str() {
         "mock" => {
