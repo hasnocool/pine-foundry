@@ -725,6 +725,28 @@ async fn api_binance_normalized_quote(
         .map_err(internal_error)
 }
 
+async fn api_bank_of_canada_fx(
+    State(s): State<AppState>,
+    Path((base, quote)): Path<(String, String)>,
+) -> Result<Json<PublicQuote>, (StatusCode, String)> {
+    s.providers
+        .bank_of_canada_fx(&base, &quote)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_bank_of_canada_series(
+    State(s): State<AppState>,
+    Path(series): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    s.providers
+        .bank_of_canada_series(&series)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
 async fn api_frankfurter_rate(
     State(s): State<AppState>,
     Path((base, quote)): Path<(String, String)>,
@@ -1074,7 +1096,10 @@ async fn live_fx_feed(s: AppState) {
                 if let Some(pair_name) = pair.strip_suffix("=X") {
                     if pair_name.len() >= 6 {
                         let (base, quote_ccy) = pair_name.split_at(3);
-                        quote = s.providers.frankfurter_rate(base, quote_ccy).await.ok();
+                        quote = match s.providers.bank_of_canada_fx(base, quote_ccy).await {
+                            Ok(value) => Some(value),
+                            Err(_) => s.providers.frankfurter_rate(base, quote_ccy).await.ok(),
+                        };
                     }
                 }
             }
@@ -1305,6 +1330,8 @@ async fn run_server() {
         .route("/api/providers/coinbase/:symbol/trades", get(api_coinbase_trades))
         .route("/api/providers/frankfurter/:base/:quote", get(api_frankfurter_rate))
         .route("/api/providers/frankfurter/:base/rates/:quotes", get(api_frankfurter_rates))
+        .route("/api/providers/bank-of-canada/:base/:quote", get(api_bank_of_canada_fx))
+        .route("/api/providers/bank-of-canada/series/:series", get(api_bank_of_canada_series))
         .route("/api/presets", get(list_presets).post(create_preset))
         .route("/api/presets/:id", delete(delete_preset))
         .route("/api/scans", get(list_scans).post(create_scan))
