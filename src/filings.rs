@@ -87,7 +87,7 @@ impl SecFilingRouter {
         self.submissions(ticker, cik).await
     }
 
-    pub async fn refresh_configured(&self) {
+    pub async fn refresh_configured(&self) -> Vec<FilingEvent> {
         let tickers = env::var("PINE_FOUNDRY_SEC_TICKERS")
             .unwrap_or_else(|_| "".to_string())
             .split(',')
@@ -107,18 +107,20 @@ impl SecFilingRouter {
             })
             .buffer_unordered(2);
 
-        worker
-            .for_each(|result| async {
-                match result {
-                    Ok(events) => {
-                        for event in events {
-                            self.emit(event).await;
-                        }
+        let mut worker = worker;
+        let mut collected = Vec::new();
+        while let Some(result) = worker.next().await {
+            match result {
+                Ok(events) => {
+                    for event in events {
+                        self.emit(event.clone()).await;
+                        collected.push(event);
                     }
-                    Err(error) => eprintln!("SEC filing feed: {error}"),
                 }
-            })
-            .await;
+                Err(error) => eprintln!("SEC filing feed: {error}"),
+            }
+        }
+        collected
     }
 
     async fn ticker_map(&self) -> Result<HashMap<String, String>, String> {
