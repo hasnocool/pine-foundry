@@ -1,4 +1,5 @@
 // src/main.rs
+mod providers;
 use axum::{
     extract::{ws::{Message, WebSocket, WebSocketUpgrade}, Path, State},
     http::StatusCode,
@@ -7,7 +8,8 @@ use axum::{
     Json, Router,
 };
 use clap::{Parser, Subcommand};
-use futures_util::SinkExt;
+use futures_util::{SinkExt, StreamExt};
+use providers::{ProviderHealth, PublicProviderRouter, PublicQuote};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -32,6 +34,7 @@ struct Cli {
 enum Command {
     Serve,
     Presets,
+    Providers,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -194,7 +197,7 @@ enum MarketEvent {
     Reference {
         symbol: String, ts_ms: i64, issue_type: Option<IssueType>,
         shares_float: Option<f64>, shares_outstanding: Option<f64>,
-        market_cap: Option<f64>, previous_close: Option<f64>,
+        market_cap: Option<f64>, previous_close: Option<f64>, day_volume: Option<f64>,
     },
 }
 
@@ -232,6 +235,7 @@ struct AppState {
     market: Arc<RwLock<HashMap<String, SecurityState>>>,
     scans: Arc<RwLock<HashMap<Uuid, ScanRuntime>>>,
     presets: Arc<PresetStore>,
+    providers: Arc<PublicProviderRouter>,
 }
 
 struct PresetStore {
