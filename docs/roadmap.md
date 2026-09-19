@@ -67,6 +67,7 @@
 - Daily replay command.
 - Same state/metric engine used for replay.
 - Symbol evidence endpoint.
+- Catalyst market-reaction evidence at now/5m/15m where replay data permits.
 
 ### P1 — news intelligence
 
@@ -78,6 +79,7 @@
 - URL deduplication.
 - Ticker-aware query expansion.
 - Configurable stock/company aliases.
+- Automatic .env loading for local NewsAPI/runtime configuration.
 - Catalyst keyword classification.
 - Story clustering.
 - News velocity.
