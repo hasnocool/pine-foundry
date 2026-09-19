@@ -821,7 +821,7 @@ async fn run_coinbase(state: AppState) {
                         .streams
                         .disconnected("coinbase", Some("subscription send failed".to_string()))
                         .await;
-                    sleep(Duration::from_secs(reconnect_secs())).await;
+                    sleep(reconnect_delay(reconnect_attempts)).await;
                     continue;
                 }
                 let _ = socket
