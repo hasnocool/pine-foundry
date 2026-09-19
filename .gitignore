@@ -5,3 +5,7 @@ web/dist/
 web/.vite/
 .DS_Store
 *.log
+
+.env
+.env.*
+!.env.example
