@@ -100,7 +100,7 @@ impl Field {
             Self::TradeImbalance => "Trade Imbalance",
             Self::Cvd => "CVD",
             Self::TradeCount1m => "Trades (1m)",
-            Self::TradeRate1m => "Trade Rate (1m)",
+            Self::TradeRate1m => "Trades/sec (1m avg)",
             Self::BuyVolume1m => "Buy Volume (1m)",
             Self::SellVolume1m => "Sell Volume (1m)",
             Self::Vwap15m => "VWAP (15m)",
@@ -765,7 +765,7 @@ fn metrics(s: &SecurityState) -> Metrics {
     let book = current_book_metrics(s);
     let current_bucket = s.minute_buckets.back().cloned().unwrap_or_default();
     let trade_count_1m = current_bucket.trade_count as f64;
-    let trade_rate_1m = trade_count_1m / (1.0_f64.max(1.0));
+    let trade_rate_1m = trade_count_1m / 60.0;
     let buy_volume_1m = current_bucket.buy_volume;
     let sell_volume_1m = current_bucket.sell_volume;
     let vwap_buckets = s.minute_buckets.iter().rev().take(15).collect::<Vec<_>>();
