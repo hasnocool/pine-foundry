@@ -360,7 +360,7 @@ async fn ensure_crypto_symbol(
 async fn resync_book(state: &AppState, symbol: &str, provider: providers::ProviderId) {
     let (bids, asks, sequence) = match provider {
         providers::ProviderId::Binance => {
-            let Ok(value) = state.providers.binance_depth(symbol, 100).await else { return; };
+            let Ok(value) = state.providers.binance_depth(symbol, 5000).await else { return; };
             (
                 parse_levels(value.get("bids")),
                 parse_levels(value.get("asks")),
