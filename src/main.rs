@@ -340,6 +340,22 @@ impl SecurityState {
             minute_buckets: VecDeque::with_capacity(20),
         }
     }
+
+    fn blank(symbol: &str, price: f64, session: MarketSession, now: i64) -> Self {
+        Self {
+            symbol: symbol.to_string(),
+            issue_type: IssueType::CommonStock,
+            session,
+            last_price: price,
+            previous_close: None,
+            day_volume: 0.0,
+            shares_float: None,
+            shares_outstanding: None,
+            market_cap: None,
+            last_updated_ms: now,
+            minute_buckets: VecDeque::with_capacity(20),
+        }
+    }
 }
 
 impl PresetStore {
@@ -509,13 +525,14 @@ fn apply_event(s: &mut SecurityState, event: &MarketEvent) {
         MarketEvent::Trade { ts_ms, price, size, session, .. } => {
             s.last_price = *price; s.session = *session; s.last_updated_ms = *ts_ms; s.day_volume += *size; minute_update(s, *ts_ms, *price, *size);
         }
-        MarketEvent::Reference { ts_ms, issue_type, shares_float, shares_outstanding, market_cap, previous_close, .. } => {
+        MarketEvent::Reference { ts_ms, issue_type, shares_float, shares_outstanding, market_cap, previous_close, day_volume, .. } => {
             s.last_updated_ms = *ts_ms;
             if let Some(v) = issue_type { s.issue_type = *v; }
             if shares_float.is_some() { s.shares_float = *shares_float; }
             if shares_outstanding.is_some() { s.shares_outstanding = *shares_outstanding; }
             if market_cap.is_some() { s.market_cap = *market_cap; }
             if previous_close.is_some() { s.previous_close = *previous_close; }
+            if let Some(volume) = day_volume { s.day_volume = *volume; }
         }
     }
 }
@@ -540,10 +557,28 @@ impl ScanRuntime {
 }
 
 #[derive(Debug, Serialize)]
-struct Health { ok: bool, service: &'static str, mock_feed: bool }
+struct Health {
+    ok: bool,
+    service: &'static str,
+    feed_mode: String,
+    providers: Vec<ProviderHealth>,
+}
 
-async fn health() -> Json<Health> {
-    Json(Health { ok: true, service: "pine-foundry", mock_feed: true })
+async fn health(State(s): State<AppState>) -> Json<Health> {
+    Json(Health {
+        ok: true,
+        service: "pine-foundry",
+        feed_mode: env::var("PINE_FOUNDRY_FEED").unwrap_or_else(|_| "auto".into()),
+        providers: s.providers.health().await,
+    })
+}
+
+async fn provider_health(State(s): State<AppState>) -> Json<Vec<ProviderHealth>> {
+    Json(s.providers.health().await)
+}
+
+async fn provider_routes() -> Json<Vec<providers::PublicProviderRoute>> {
+    Json(PublicProviderRouter::routes())
 }
 
 async fn list_presets(State(s): State<AppState>) -> Json<Vec<Preset>> { Json(s.presets.list().await) }
@@ -629,6 +664,53 @@ async fn make_snapshot(s: &AppState, id: Uuid) -> Result<ScannerEvent, String> {
     let states = s.market.read().await.values().cloned().collect::<Vec<_>>();
     let scans = s.scans.read().await;
     scans.get(&id).map(|scan| scan.snapshot(states.into_iter())).ok_or_else(|| "scan not found".into())
+}
+
+async fn publish_market_state(s: &AppState, updated: SecurityState) {
+    let symbol = updated.symbol.clone();
+    let mut scans = s.scans.write().await;
+    for scan in scans.values_mut() {
+        let before = scan.matches.contains(&symbol);
+        let after = matches_scan(&scan.definition, &updated);
+        match (before, after) {
+            (false, true) => {
+                scan.matches.insert(symbol.clone());
+                let _ = scan.tx.send(ScannerEvent::ResultAdded { scan_id: scan.id, row: row(&updated) });
+            }
+            (true, false) => {
+                scan.matches.remove(&symbol);
+                let _ = scan.tx.send(ScannerEvent::ResultRemoved { scan_id: scan.id, symbol: symbol.clone() });
+            }
+            (true, true) => {
+                let _ = scan.tx.send(ScannerEvent::ResultUpdated { scan_id: scan.id, row: row(&updated) });
+            }
+            (false, false) => {}
+        }
+    }
+}
+
+async fn ingest_public_quote(s: &AppState, quote: PublicQuote) {
+    let session = configured_live_session();
+    let updated = {
+        let mut market = s.market.write().await;
+        let state = market.entry(quote.symbol.clone())
+            .or_insert_with(|| SecurityState::blank(&quote.symbol, quote.price, session, quote.ts_ms));
+        let old_volume = state.day_volume;
+        state.last_price = quote.price;
+        state.previous_close = quote.previous_close.or(state.previous_close);
+        state.shares_float = quote.shares_float.or(state.shares_float);
+        state.shares_outstanding = quote.shares_outstanding.or(state.shares_outstanding);
+        state.market_cap = quote.market_cap.or(state.market_cap);
+        state.session = session;
+        if let Some(volume) = quote.volume {
+            state.day_volume = volume.max(0.0);
+        }
+        let volume_delta = (state.day_volume - old_volume).max(0.0);
+        state.last_updated_ms = quote.ts_ms;
+        minute_update(state, quote.ts_ms, quote.price, volume_delta);
+        state.clone()
+    };
+    publish_market_state(s, updated).await;
 }
 
 async fn ingest(s: &AppState, event: MarketEvent) {
