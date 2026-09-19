@@ -1552,25 +1552,26 @@ pub(crate) async fn ingest_book(
     bids: Vec<BookLevel>,
     asks: Vec<BookLevel>,
     ts_ms: i64,
-) {
+) -> bool {
     let mid_hint = match (bids.first(), asks.first()) {
         (Some(bid), Some(ask)) => (bid.price + ask.price) / 2.0,
         (Some(bid), None) => bid.price,
         (None, Some(ask)) => ask.price,
         _ => 0.0,
     };
-    let updated = {
+    let (updated, accepted) = {
         let mut market = s.market.write().await;
         let state = market
             .entry(symbol.clone())
             .or_insert_with(|| SecurityState::blank(&symbol, mid_hint, MarketSession::Regular, ts_ms));
         let key = venue.to_ascii_lowercase();
         let book = state.books.entry(key.clone()).or_default();
-        if snapshot {
+        let accepted = if snapshot {
             book.replace(bids.clone(), asks.clone(), sequence, ts_ms);
+            true
         } else {
-            let _ = book.apply_update(&bids, &asks, sequence, ts_ms);
-        }
+            book.apply_update(&bids, &asks, sequence, ts_ms)
+        };
 
         let book_metrics = book.metrics();
         update_venue(
@@ -1585,7 +1586,7 @@ pub(crate) async fn ingest_book(
             sequence,
         );
         state.last_updated_ms = ts_ms;
-        state.clone()
+        (state.clone(), accepted)
     };
 
     if let Ok(payload) = serde_json::to_value(serde_json::json!({
@@ -1611,6 +1612,7 @@ pub(crate) async fn ingest_book(
     }
 
     publish_market_state(s, updated).await;
+    accepted
 }
 
 
