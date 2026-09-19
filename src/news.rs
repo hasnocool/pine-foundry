@@ -815,6 +815,8 @@ fn reddit_subreddit_from_url(url: &str) -> Option<String> {
     (!subreddit.is_empty()).then(|| format!("r/{subreddit}"))
 }
 
+pub(crate) fn parse_date_for_state(value: &str) -> Option<i64> { parse_date_ms(value) }
+
 fn parse_date_ms(value: &str) -> Option<i64> {
     DateTime::parse_from_rfc3339(value)
         .map(|timestamp| timestamp.timestamp_millis())
