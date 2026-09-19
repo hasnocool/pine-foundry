@@ -2397,6 +2397,7 @@ fn print_providers() {
 
 #[tokio::main]
 async fn main() {
+    let _ = dotenvy::dotenv();
     match Cli::parse().command.unwrap_or(Command::Serve) {
         Command::Serve => run_server().await,
         Command::Presets => print_presets(),
