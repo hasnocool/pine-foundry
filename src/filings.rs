@@ -45,6 +45,7 @@ pub struct SecFilingRouter {
     journal: Arc<EventJournal>,
     health: Arc<RwLock<FilingHealth>>,
     seen: Arc<RwLock<HashSet<String>>>,
+    ticker_cache: Arc<RwLock<Option<(i64, HashMap<String, String>)>>>,
 }
 
 impl SecFilingRouter {
@@ -72,6 +73,7 @@ impl SecFilingRouter {
                 last_error: None,
             })),
             seen: Arc::new(RwLock::new(HashSet::new())),
+            ticker_cache: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -124,6 +126,13 @@ impl SecFilingRouter {
     }
 
     async fn ticker_map(&self) -> Result<HashMap<String, String>, String> {
+        let now = now_ms();
+        if let Some((cached_at, map)) = self.ticker_cache.read().await.clone() {
+            if now.saturating_sub(cached_at) < 6 * 60 * 60 * 1000 {
+                return Ok(map);
+            }
+        }
+
         let url = "https://www.sec.gov/files/company_tickers.json";
         let value = self.get_json(url).await?;
         let object = value
@@ -145,6 +154,7 @@ impl SecFilingRouter {
             };
             map.insert(ticker.to_ascii_uppercase(), format!("{cik:0>10}"));
         }
+        *self.ticker_cache.write().await = Some((now, map.clone()));
         Ok(map)
     }
 
