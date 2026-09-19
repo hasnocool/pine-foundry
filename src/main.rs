@@ -587,7 +587,162 @@ async fn api_yahoo_quote(
     Path(symbol): Path<String>,
 ) -> Result<Json<Option<PublicQuote>>, (StatusCode, String)> {
     s.providers
-        .yahoo_chart(&symbol)
+        .yahoo_chart(&symbol, providers::AssetClass::Equity)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_yahoo_fx(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<Option<PublicQuote>>, (StatusCode, String)> {
+    s.providers
+        .yahoo_chart(&symbol, providers::AssetClass::Fx)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_tradingview_canada(
+    State(s): State<AppState>,
+    Path((start, end)): Path<(usize, usize)>,
+) -> Result<Json<Vec<PublicQuote>>, (StatusCode, String)> {
+    s.providers
+        .tradingview_scan_canada(start, end)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_tradingview_fx(
+    State(s): State<AppState>,
+    Path((start, end)): Path<(usize, usize)>,
+) -> Result<Json<Vec<PublicQuote>>, (StatusCode, String)> {
+    s.providers
+        .tradingview_scan_fx(start, end)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_kraken_ticker(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<PublicQuote>, (StatusCode, String)> {
+    s.providers
+        .kraken_ticker(&symbol)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_kraken_ohlc(
+    State(s): State<AppState>,
+    Path((symbol, interval)): Path<(String, u16)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    s.providers
+        .kraken_ohlc(&symbol, interval)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_kraken_depth(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    s.providers
+        .kraken_depth(&symbol)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_kraken_trades(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    s.providers
+        .kraken_trades(&symbol)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_coinbase_ticker(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<PublicQuote>, (StatusCode, String)> {
+    s.providers
+        .coinbase_ticker(&symbol)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_coinbase_candles(
+    State(s): State<AppState>,
+    Path((symbol, granularity)): Path<(String, u32)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    s.providers
+        .coinbase_candles(&symbol, granularity)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_coinbase_book(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    s.providers
+        .coinbase_book(&symbol)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_coinbase_trades(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    s.providers
+        .coinbase_trades(&symbol)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_binance_normalized_quote(
+    State(s): State<AppState>,
+    Path(symbol): Path<String>,
+) -> Result<Json<PublicQuote>, (StatusCode, String)> {
+    s.providers
+        .binance_quote(&symbol)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_frankfurter_rate(
+    State(s): State<AppState>,
+    Path((base, quote)): Path<(String, String)>,
+) -> Result<Json<PublicQuote>, (StatusCode, String)> {
+    s.providers
+        .frankfurter_rate(&base, &quote)
+        .await
+        .map(Json)
+        .map_err(internal_error)
+}
+
+async fn api_frankfurter_rates(
+    State(s): State<AppState>,
+    Path((base, quotes)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let quote_list = quotes.split(',').map(str::to_owned).collect::<Vec<_>>();
+    s.providers
+        .frankfurter_rates(&base, &quote_list)
         .await
         .map(Json)
         .map_err(internal_error)
@@ -834,6 +989,100 @@ async fn ingest(s: &AppState, event: MarketEvent) {
     }
 }
 
+fn csv_env(name: &str, default_value: &str) -> Vec<String> {
+    env::var(name)
+        .unwrap_or_else(|_| default_value.to_string())
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn kraken_pair(binance_symbol: &str) -> String {
+    let upper = binance_symbol.to_ascii_uppercase();
+    if let Some(base) = upper.strip_suffix("USDT") {
+        format!("{base}USD")
+    } else if let Some(base) = upper.strip_suffix("USDC") {
+        format!("{base}USD")
+    } else {
+        upper
+    }
+}
+
+fn coinbase_product(binance_symbol: &str) -> String {
+    let upper = binance_symbol.to_ascii_uppercase();
+    if let Some(base) = upper.strip_suffix("USDT") {
+        format!("{base}-USD")
+    } else if let Some(base) = upper.strip_suffix("USDC") {
+        format!("{base}-USD")
+    } else {
+        upper
+    }
+}
+
+async fn live_crypto_feed(s: AppState) {
+    let symbols = csv_env(
+        "PINE_FOUNDRY_CRYPTO_SYMBOLS",
+        "BTCUSDT,ETHUSDT,SOLUSDT",
+    );
+    let poll_secs = env::var("PINE_FOUNDRY_CRYPTO_POLL_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(2)
+        .max(1);
+    let mut interval = time::interval(Duration::from_secs(poll_secs));
+
+    loop {
+        interval.tick().await;
+        for symbol in &symbols {
+            let quote = match s.providers.binance_quote(symbol).await {
+                Ok(quote) => Some(quote),
+                Err(_) => match s.providers.kraken_ticker(&kraken_pair(symbol)).await {
+                    Ok(quote) => Some(quote),
+                    Err(_) => s.providers.coinbase_ticker(&coinbase_product(symbol)).await.ok(),
+                },
+            };
+
+            if let Some(quote) = quote {
+                ingest_public_quote(&s, quote).await;
+            }
+        }
+    }
+}
+
+async fn live_fx_feed(s: AppState) {
+    let pairs = csv_env(
+        "PINE_FOUNDRY_FX_PAIRS",
+        "EURUSD=X,USDCAD=X,GBPUSD=X,USDJPY=X",
+    );
+    let poll_secs = env::var("PINE_FOUNDRY_FX_POLL_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(15)
+        .max(5);
+    let mut interval = time::interval(Duration::from_secs(poll_secs));
+
+    loop {
+        interval.tick().await;
+        for pair in &pairs {
+            let mut quote = s.providers.yahoo_chart(pair, providers::AssetClass::Fx).await.ok().flatten();
+            if quote.is_none() {
+                if let Some(pair_name) = pair.strip_suffix("=X") {
+                    if pair_name.len() >= 6 {
+                        let (base, quote_ccy) = pair_name.split_at(3);
+                        quote = s.providers.frankfurter_rate(base, quote_ccy).await.ok();
+                    }
+                }
+            }
+
+            if let Some(quote) = quote {
+                ingest_public_quote(&s, quote).await;
+            }
+        }
+    }
+}
+
 async fn live_feed(s: AppState) {
     let provider = s.providers.clone();
     let poll_secs = env::var("PINE_FOUNDRY_POLL_SECS")
@@ -876,13 +1125,32 @@ async fn live_feed(s: AppState) {
             start += page_size;
         }
 
+        let mut canada_start = 0usize;
+        while canada_start < max_rows {
+            let canada_end = (canada_start + page_size).min(max_rows);
+            match provider.tradingview_scan_canada(canada_start, canada_end).await {
+                Ok(quotes) => {
+                    let count = quotes.len();
+                    for quote in quotes {
+                        ingest_public_quote(&s, quote).await;
+                    }
+                    delivered += count;
+                    if count < page_size {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+            canada_start += page_size;
+        }
+
         if delivered == 0 {
             let symbols: Vec<String> = {
                 let market = s.market.read().await;
                 market.keys().take(100).cloned().collect()
             };
 
-            match provider.yahoo_spark(&symbols).await {
+            match provider.yahoo_spark(&symbols, providers::AssetClass::Equity).await {
                 Ok(quotes) if !quotes.is_empty() => {
                     delivered = quotes.len();
                     for quote in quotes {
@@ -1014,12 +1282,26 @@ async fn run_server() {
         .route("/api/providers", get(provider_routes))
         .route("/api/providers/health", get(provider_health))
         .route("/api/providers/yahoo/:symbol", get(api_yahoo_quote))
+        .route("/api/providers/yahoo/fx/:symbol", get(api_yahoo_fx))
+        .route("/api/providers/tradingview/canada/:start/:end", get(api_tradingview_canada))
+        .route("/api/providers/tradingview/forex/:start/:end", get(api_tradingview_fx))
         .route("/api/providers/nasdaq/:symbol", get(api_nasdaq_quote))
         .route("/api/providers/nasdaq/:symbol/info", get(api_nasdaq_info))
         .route("/api/providers/tradingview/:exchange/:symbol", get(api_tradingview_symbol))
         .route("/api/providers/binance/:symbol/ticker", get(api_binance_ticker))
         .route("/api/providers/binance/:symbol/klines/:interval", get(api_binance_klines))
         .route("/api/providers/binance/:symbol/depth", get(api_binance_depth))
+        .route("/api/providers/binance/:symbol/quote", get(api_binance_normalized_quote))
+        .route("/api/providers/kraken/:symbol/ticker", get(api_kraken_ticker))
+        .route("/api/providers/kraken/:symbol/ohlc/:interval", get(api_kraken_ohlc))
+        .route("/api/providers/kraken/:symbol/depth", get(api_kraken_depth))
+        .route("/api/providers/kraken/:symbol/trades", get(api_kraken_trades))
+        .route("/api/providers/coinbase/:symbol/ticker", get(api_coinbase_ticker))
+        .route("/api/providers/coinbase/:symbol/candles/:granularity", get(api_coinbase_candles))
+        .route("/api/providers/coinbase/:symbol/book", get(api_coinbase_book))
+        .route("/api/providers/coinbase/:symbol/trades", get(api_coinbase_trades))
+        .route("/api/providers/frankfurter/:base/:quote", get(api_frankfurter_rate))
+        .route("/api/providers/frankfurter/:base/rates/:quotes", get(api_frankfurter_rates))
         .route("/api/presets", get(list_presets).post(create_preset))
         .route("/api/presets/:id", delete(delete_preset))
         .route("/api/scans", get(list_scans).post(create_scan))
@@ -1036,6 +1318,8 @@ async fn run_server() {
         }
         _ => {
             tokio::spawn(live_feed(state.clone()));
+            tokio::spawn(live_crypto_feed(state.clone()));
+            tokio::spawn(live_fx_feed(state.clone()));
         }
     }
     let addr: SocketAddr = address.parse().expect("PINE_FOUNDRY_ADDR must be host:port");
