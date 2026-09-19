@@ -271,6 +271,10 @@ struct CatalystEvent {
     confidence: f64,
     title: String,
     url: Option<String>,
+    baseline_price: f64,
+    reaction_now_pct: Option<f64>,
+    reaction_5m_pct: Option<f64>,
+    reaction_15m_pct: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1095,6 +1099,23 @@ async fn catalysts_for_symbol(
     Ok(Json(state.catalysts.iter().rev().cloned().collect()))
 }
 
+fn catalyst_reaction_after(
+    state: &SecurityState,
+    catalyst: &CatalystEvent,
+    minutes: i64,
+) -> Option<f64> {
+    if catalyst.baseline_price <= 0.0 {
+        return None;
+    }
+    let target = catalyst.timestamp_ms + minutes * 60_000;
+    let price = state
+        .minute_buckets
+        .iter()
+        .find(|bucket| bucket.start_ms >= target)
+        .map(|bucket| bucket.close_price)?;
+    Some((price / catalyst.baseline_price - 1.0) * 100.0)
+}
+
 async fn symbol_evidence(
     State(s): State<AppState>,
     Path(symbol): Path<String>,
@@ -1136,11 +1157,20 @@ async fn symbol_evidence(
         .take(20)
         .collect::<Vec<_>>();
 
+    let mut catalysts = state.catalysts.iter().rev().take(20).cloned().collect::<Vec<_>>();
+    for catalyst in &mut catalysts {
+        if catalyst.baseline_price > 0.0 && state.last_price > 0.0 {
+            catalyst.reaction_now_pct = Some((state.last_price / catalyst.baseline_price - 1.0) * 100.0);
+        }
+        catalyst.reaction_5m_pct = catalyst_reaction_after(&state, catalyst, 5);
+        catalyst.reaction_15m_pct = catalyst_reaction_after(&state, catalyst, 15);
+    }
+
     Ok(Json(SymbolEvidence {
         symbol: state.symbol.clone(),
         row: row(&state),
         catalyst: state.last_catalyst.clone(),
-        catalysts: state.catalysts.iter().rev().take(20).cloned().collect(),
+        catalysts,
         venues,
         recent_news,
     }))
@@ -1827,6 +1857,10 @@ pub(crate) async fn ingest_filing_events(s: &AppState, filings: &[FilingEvent]) 
                 confidence: 0.95,
                 title: format!("SEC {} filing", filing.form),
                 url: Some(filing.url.clone()),
+                baseline_price: state.last_price,
+                reaction_now_pct: None,
+                reaction_5m_pct: None,
+                reaction_15m_pct: None,
             });
             while state.catalysts.len() > 100 { state.catalysts.pop_front(); }
             state.last_updated_ms = now.max(state.last_updated_ms);
@@ -1873,6 +1907,10 @@ pub(crate) async fn ingest_news_articles(s: &AppState, articles: &[NewsArticle])
                 confidence: 0.60,
                 title: article.title.clone(),
                 url: Some(article.url.clone()),
+                baseline_price: state.last_price,
+                reaction_now_pct: None,
+                reaction_5m_pct: None,
+                reaction_15m_pct: None,
             });
             while state.catalysts.len() > 100 { state.catalysts.pop_front(); }
             state.last_updated_ms = now.max(state.last_updated_ms);
