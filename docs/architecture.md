@@ -3,48 +3,86 @@
 ## Runtime graph
 
 ~~~text
-Provider adapter
-      |
-      v
-  MarketEvent
-      |
-      v
-SecurityState + 20 minute buckets
-      |
-      v
-    Metrics
-      |
-      v
-  Filter engine
-      |
-      v
- ScanRuntime membership
-      |
-      +----> REST snapshots
-      |
-      +----> WebSocket deltas
-                    |
-                    v
-                 Web UI
+                         +-----------------------+
+                         |    Public providers   |
+                         +-----------+-----------+
+                                     |
+                    +----------------+----------------+
+                    |                                 |
+              REST snapshots                     WebSockets
+                    |                                 |
+                    +---------------+-----------------+
+                                    v
+                               MarketEvent
+                                    |
+                                    v
+                           SecurityState
+                         + rolling buckets
+                                    |
+                                    v
+                                 Metrics
+                                    |
+                                    v
+                             Filter engine
+                                    |
+                                    v
+                               ScanRuntime
+                              /          \
+                             v            v
+                       REST snapshot  WebSocket deltas
+                                            |
+                                            v
+                                         Web UI
+
+News providers
+    |
+    +--> Reddit RSS / JSON
+    +--> Google News RSS
+    +--> NewsAPI
+            |
+            v
+       NewsArticle
+            |
+            v
+      normalize/dedupe
+            |
+            v
+      bounded news cache
+            |
+            +--> REST/API
+            +--> UI
+            +--> future research/AI
 ~~~
 
 ## Hot path
 
-A market event touches one symbol. The engine updates that symbol's state, recalculates derived metrics, and evaluates active scans. Each scan keeps a HashSet membership index, so add/remove transitions are O(1) membership operations. Full sorting happens for snapshots and is deliberately not performed for every update.
+A market event touches one symbol. The engine updates that symbol's state, recalculates derived metrics and evaluates active scans.
+
+WebSocket trade streams feed the same MarketEvent::Trade path used by the deterministic mock feed. The crypto providers run in independent Tokio tasks so one disconnect does not stall another venue.
+
+## News path
+
+News retrieval is deliberately outside the market-state hot path. Each search fans out concurrently to the configured public sources. Provider failures are isolated and recorded in news health state.
+
+Results are normalized into NewsArticle, deduplicated by URL and sorted newest first before being placed in the bounded cache.
 
 ## Current concurrency
 
 - Tokio runtime for timers, sockets and asynchronous filesystem access.
+- Tokio WebSocket streams for crypto trade events.
 - RwLock<HashMap<Symbol, SecurityState>> for market state.
 - RwLock<HashMap<ScanId, ScanRuntime>> for active scans.
-- broadcast channels for per-scan WebSocket fanout.
-- The mock feed emits normalized MarketEvent values, exactly as a future provider adapter should.
+- RwLock news health/cache structures.
+- Broadcast channels for per-scan WebSocket fanout.
+- Futures concurrency limits for news fanout.
 
 No blocking network or filesystem APIs are used in the asynchronous server path.
 
 ## Persistence
 
-Only user-created presets are persisted today. Builtins are reconstructed at startup and are immutable through the API. Custom presets are written to a temporary file and atomically renamed.
+Only user-created presets are persisted today. Builtins are reconstructed at startup and immutable through the API.
+
+News cache is intentionally volatile. Durable news history is a future research-storage layer.
 
 ## Scale path
 
@@ -54,21 +92,27 @@ The first optimization after real market-data integration should be dependency i
 Field -> ScanId[]
 ~~~
 
-For much larger universes, replace full result sorting with an order-statistics index and introduce bounded delta batching for browser clients.
+For larger universes, replace full result sorting with an order-statistics index and introduce bounded delta batching for browser clients.
+
+For news, add a persistent append-only article store only after measuring the memory/cache and downstream research requirements.
 
 ## Extension points
 
 ### Market providers
 
-Normalize vendor-specific data into MarketEvent.
+Normalize vendor-specific quotes, trades, reference data, session changes, halts and sequence IDs into MarketEvent values.
+
+### News providers
+
+Normalize feed-specific RSS/JSON/article schemas into NewsArticle.
 
 ### Research
 
-Persist scanner entry/exit/update events and replay them into the same scanner engine.
+Persist scanner and news observations and replay them together for event studies and historical scanner evaluation.
 
 ### AI
 
-Do not put an LLM in the tick path. Consume scanner events downstream and enrich only interesting transitions.
+Consume interesting scanner transitions plus compact related-news evidence. Do not put an LLM in the tick path.
 
 ### Broker integration
 
