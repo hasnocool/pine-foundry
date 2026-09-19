@@ -1,36 +1,41 @@
 # Pine Foundry
 
-Pine Foundry is a local-first, real-time market scanner and research foundation built around a deterministic event-driven scanner engine.
+Pine Foundry is a local-first, real-time market scanner and event-fabric foundation. It combines venue-aware market data, crypto WebSockets, order books, public news, filings, catalyst detection and replay around one deterministic state engine.
 
-It is an original implementation inspired by the public workflow of desktop equity scanners. It does not copy proprietary source code, branding, assets, private thresholds, or undocumented vendor internals.
+It is an original implementation inspired by the public workflow of desktop market scanners. It does not copy proprietary source code, branding, assets, private thresholds or undocumented vendor internals.
 
 ## Implemented
 
-- Event-driven market state instead of polling.
-- Price, absolute change, previous-close %, 1m/5m/15m % metrics.
-- Day volume and rolling 1m volume.
-- Shares float, shares outstanding and market cap.
-- Issue-type and session universe controls.
-- Min/max filters with explicit enable/disable state.
-- Saved builtin/custom presets with JSON persistence.
-- Stable ranked result snapshots.
-- Incremental add/remove/update scanner events.
-- WebSocket snapshot + delta + resync protocol.
-- REST API for scans and presets.
-- Three-window-ready backend.
-- Browser UI with filter editing, preset switching, column visibility and sorting.
-- Deterministic synthetic feed for offline development.
-- Public-provider fallback stack for U.S., Canadian, crypto and FX markets.
-- Event-driven public crypto trade streams from Binance, Kraken and Coinbase.
-- Unified news aggregation from Reddit RSS, Reddit JSON, Google News RSS and NewsAPI.
-- Bounded local news cache and provider health metrics.
-- Local tests and validation only; **no GitHub Actions**.
+- Equity scanner with saved presets and custom scans.
+- Explicit equity/crypto/FX asset-class universes.
+- U.S., Canadian and FX public quote adapters.
+- Binance, Kraken and Coinbase public crypto WebSocket trades.
+- Binance, Kraken and Coinbase public order-book streams.
+- Automatic REST order-book resync after sequence gaps.
+- Venue-specific price/book state with configurable primary crypto venue.
+- Cross-venue dislocation.
+- Spread, microprice, depth, book imbalance and liquidity metrics.
+- Trade imbalance and CVD.
+- Stream freshness and independent provider health.
+- Reddit RSS and JSON search.
+- Google News RSS search.
+- NewsAPI with local request-budget guards.
+- News URL deduplication and story clustering.
+- Deterministic catalyst classification.
+- SEC EDGAR filing ingestion.
+- Canadian SEDAR+/TSX disclosure discovery through public Google News RSS restrictions.
+- Unified CatalystEvent state.
+- Asynchronous bounded JSONL event journal.
+- Daily market/news/filing replay.
+- Symbol evidence API and browser evidence panel.
+- Crypto Momentum, Crypto Order Flow and FX Momentum presets.
+- No GitHub Actions.
 
 ## Quick start
 
-~~~
+~~~text
 cp .env.example .env
-# Set NEWSAPI in .env when using NewsAPI.
+# Put NEWSAPI in .env only when using NewsAPI.
 cargo fmt --all -- --check
 cargo check
 cargo test
@@ -43,33 +48,19 @@ Server:
 http://127.0.0.1:3000
 ~~~
 
-Health:
+Replay a recorded day:
 
-~~~
-curl http://127.0.0.1:3000/health
-~~~
-
-List presets:
-
-~~~
-cargo run -- presets
+~~~text
+cargo run -- replay 2026-09-19
 ~~~
 
-List provider routes:
+Browser:
 
-~~~
-cargo run -- providers
-~~~
-
-Web client:
-
-~~~
+~~~text
 cd web
-npm install
+npm install --no-audit --no-fund
 npm run dev
 ~~~
-
-Then open the Vite URL shown by the dev server.
 
 ## Environment
 
@@ -81,20 +72,24 @@ PINE_FOUNDRY_DATA_DIR=data
 PINE_FOUNDRY_FEED=auto
 ~~~
 
-Equity polling:
+Equity/FX polling:
 
 ~~~text
 PINE_FOUNDRY_POLL_SECS=5
 PINE_FOUNDRY_TV_PAGE_SIZE=5000
 PINE_FOUNDRY_TV_MAX_ROWS=20000
 PINE_FOUNDRY_SESSION=regular
+PINE_FOUNDRY_FX_PAIRS=EURUSD=X,USDCAD=X,GBPUSD=X,USDJPY=X
+PINE_FOUNDRY_FX_POLL_SECS=15
 ~~~
 
-Crypto WebSockets:
+Crypto streams:
 
 ~~~text
 PINE_FOUNDRY_CRYPTO_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
+PINE_FOUNDRY_CRYPTO_PRIMARY=binance
 PINE_FOUNDRY_CRYPTO_WS_RECONNECT_SECS=3
+PINE_FOUNDRY_STREAM_STALE_SECS=10
 ~~~
 
 News:
@@ -108,85 +103,156 @@ PINE_FOUNDRY_NEWS_LIMIT=25
 PINE_FOUNDRY_NEWS_LOOKBACK_HOURS=24
 PINE_FOUNDRY_NEWS_CONCURRENCY=4
 PINE_FOUNDRY_NEWS_CACHE_SIZE=500
+PINE_FOUNDRY_NEWSAPI_MIN_INTERVAL_SECS=1800
+PINE_FOUNDRY_NEWSAPI_DAILY_LIMIT=90
 ~~~
 
-NEWSAPI is read from the process environment and sent in the X-Api-Key header. The credential is intentionally not stored in the repository.
-
-## Live crypto architecture
+Regulatory/corporate:
 
 ~~~text
-Binance WS aggTrade ----\
-Kraken WS trade ----------> normalized MarketEvent::Trade
-Coinbase WS trades ------/            |
-                                      v
-                              SecurityState
-                                      |
-                                      v
-                         rolling 1m/5m/15m metrics
-                                      |
-                                      v
-                                ScanRuntime
-                                      |
-                         WebSocket scanner deltas
+PINE_FOUNDRY_SEC_TICKERS=
+PINE_FOUNDRY_SEC_POLL_SECS=30
+PINE_FOUNDRY_SEC_USER_AGENT=PineFoundry/0.4 research
+PINE_FOUNDRY_CANADA_TICKERS=
+PINE_FOUNDRY_CANADA_POLL_SECS=300
 ~~~
 
-The three public crypto WebSockets run independently with reconnect loops. A provider disconnect does not stop the other streams or the equity/FX loops.
+NEWSAPI is read only from the runtime environment and is sent with X-Api-Key. The credential is not committed to the repository.
 
-The stream layer is event-driven; the REST crypto endpoints remain available for snapshots, candles and order books.
-
-## News architecture
+## Event fabric
 
 ~~~text
-ticker/query
-    |
-    +--> Reddit search.rss
-    +--> Reddit search.json
-    +--> Google News RSS search
-    +--> NewsAPI /v2/everything
-                |
-                v
-        normalize + dedupe
-                |
-                v
-          bounded cache
-                |
-                +--> REST search endpoint
-                +--> ticker endpoint
-                +--> health endpoint
+                 public sources
+                       |
+         +-------------+-------------+
+         |                           |
+      market                      catalysts
+         |                           |
+ trades / quotes / books       news / filings
+         |                           |
+         +-------------+-------------+
+                       |
+                 normalized state
+                       |
+       +---------------+---------------+
+       |               |               |
+    scanner         evidence        journal
+       |               |               |
+       v               v               v
+      Web UI           API           replay
 ~~~
 
-The automatic news worker refreshes configured tickers/queries independently from market-data loops. A failed news provider does not stop the scanner.
-
-See docs/providers.md, docs/news.md and docs/api.md for route coverage and limitations.
-
-## Architecture
+Crypto venues stay separate:
 
 ~~~text
-market provider
-   |
-   v
-MarketEvent
-   |
-   v
-SecurityState + rolling minute history
-   |
-   v
-Metrics
-   |
-   v
-Filter evaluation
-   |
-   v
-ScanRuntime membership
-   |
-   +--> REST snapshot
-   |
-   +--> WebSocket deltas
-   |
-   v
-browser scanner
+Binance ----\
+Kraken -------> venue state ---> canonical state
+Coinbase ----/                     |
+                                   v
+                         cross-venue features
 ~~~
 
-The production provider boundary should normalize quotes, trades, reference data, session changes, halt status and sequence information into the same event model used by the scanner.
+## Crypto order flow
 
-See docs/master-spec.md and docs/development.md.
+Pine Foundry computes:
+
+~~~text
+spread
+spread_bps
+mid
+microprice
+bid_depth_5
+ask_depth_5
+bid_depth_10
+ask_depth_10
+book_imbalance
+liquidity_score
+trade_imbalance
+CVD
+cross_venue_dislocation_bps
+stream_age_ms
+~~~
+
+The primary venue is configurable with PINE_FOUNDRY_CRYPTO_PRIMARY.
+
+## News and catalysts
+
+Each ticker can be searched across:
+
+~~~text
+Reddit RSS
+Reddit JSON
+Google News RSS
+NewsAPI
+~~~
+
+News is:
+- normalized
+- deduplicated
+- clustered
+- classified into catalyst types
+- counted for velocity/source diversity
+
+Catalyst types include earnings, guidance, M&A, offerings, buybacks, dividends, FDA/clinical, legal/regulatory, bankruptcy, management, contracts/partnerships, security incidents, ETFs and macro events.
+
+## Regulatory/corporate feeds
+
+U.S.:
+- SEC EDGAR ticker discovery and submissions.
+
+Canada:
+- public Google News RSS discovery restricted to SEDAR+ and TSX pages.
+- deliberately avoids undocumented SEDAR+ internal APIs.
+
+## Event journal and replay
+
+Normalized events are written asynchronously to:
+
+~~~text
+data/events/YYYY-MM-DD.jsonl
+~~~
+
+The queue is bounded and exposes dropped-record health at:
+
+~~~text
+/api/journal/health
+~~~
+
+Replay uses the same scanner engine:
+
+~~~text
+cargo run -- replay YYYY-MM-DD
+~~~
+
+## Evidence
+
+GET:
+
+~~~text
+/api/evidence/SYMBOL
+/api/catalysts/SYMBOL
+~~~
+
+The browser scanner lets you click a row to inspect:
+- venue state
+- bid/ask
+- book metrics
+- stream age
+- catalyst history
+- related news
+
+## Key API surfaces
+
+~~~text
+GET /health
+GET /api/providers
+GET /api/streams/health
+GET /api/news/search?q=bitcoin
+GET /api/news/clusters
+GET /api/filings/AAPL
+GET /api/canada/disclosures/SHOP
+GET /api/evidence/BTCUSDT
+GET /api/catalysts/BTCUSDT
+~~~
+
+See docs/master-spec.md, docs/architecture.md, docs/providers.md, docs/news.md, docs/roadmap.md and docs/api.md.
