@@ -5,6 +5,7 @@ pub const METHOD: &str = "semantic-hybrid-v1";
 
 #[derive(Debug, Clone, Default)]
 pub struct SemanticFeatures {
+    pub core_terms: Vec<String>,
     pub terms: Vec<String>,
     pub fingerprint: u64,
 }
@@ -20,10 +21,8 @@ pub fn features(
         tokens.extend(tokenize(description));
     }
 
-    let mut terms = HashSet::new();
-    for token in &tokens {
-        terms.insert(token.clone());
-    }
+    let mut core_terms = tokens.iter().cloned().collect::<HashSet<_>>();
+    let mut terms = core_terms.clone();
     for pair in tokens.windows(2) {
         if let [a, b] = pair {
             terms.insert(format!("{a}_{b}"));
@@ -37,11 +36,15 @@ pub fn features(
         terms.insert(format!("event:{}", event_type.trim().to_ascii_lowercase()));
     }
 
+    let mut core_terms = core_terms.drain().collect::<Vec<_>>();
+    core_terms.sort();
+
     let mut terms = terms.into_iter().collect::<Vec<_>>();
     terms.sort();
     terms.truncate(96);
 
     SemanticFeatures {
+        core_terms,
         fingerprint: simhash(&terms),
         terms,
     }
@@ -52,6 +55,16 @@ pub fn similarity(left: &SemanticFeatures, right: &SemanticFeatures) -> f64 {
         return 0.0;
     }
 
+    let left_core = left.core_terms.iter().collect::<HashSet<_>>();
+    let right_core = right.core_terms.iter().collect::<HashSet<_>>();
+    let core_intersection = left_core.intersection(&right_core).count() as f64;
+    let core_union = left_core.union(&right_core).count() as f64;
+    let core_jaccard = if core_union > 0.0 {
+        core_intersection / core_union
+    } else {
+        0.0
+    };
+
     let left_terms = left.terms.iter().collect::<HashSet<_>>();
     let right_terms = right.terms.iter().collect::<HashSet<_>>();
     let intersection = left_terms.intersection(&right_terms).count() as f64;
@@ -61,7 +74,8 @@ pub fn similarity(left: &SemanticFeatures, right: &SemanticFeatures) -> f64 {
     let hamming = (left.fingerprint ^ right.fingerprint).count_ones() as f64;
     let fingerprint_similarity = 1.0 - hamming / 64.0;
 
-    (0.65 * jaccard + 0.35 * fingerprint_similarity).clamp(0.0, 1.0)
+    (0.60 * core_jaccard + 0.25 * jaccard + 0.15 * fingerprint_similarity)
+        .clamp(0.0, 1.0)
 }
 
 pub fn cluster_id(features: &SemanticFeatures) -> String {
@@ -101,7 +115,9 @@ fn tokenize(text: &str) -> Vec<String> {
 
 fn normalize_synonym(token: String) -> String {
     match token.as_str() {
-        "acquire" | "acquired" | "acquires" | "acquiring" | "acquisition" | "takeover" | "merger" | "merges" => "acquisition".into(),
+        "acquire" | "acquired" | "acquires" | "acquiring" | "acquisition"
+        | "takeover" | "merger" | "merges" | "buy" | "buys" | "bought"
+        | "purchase" | "purchases" | "purchased" | "deal" | "transaction" => "acquisition".into(),
         "earnings" | "earning" | "eps" | "revenue" | "profit" | "profits" | "loss" | "losses" => "earnings".into(),
         "guidance" | "outlook" | "forecast" | "forecasts" => "guidance".into(),
         "offering" | "offerings" | "dilution" | "dilutive" | "atm" => "offering".into(),
