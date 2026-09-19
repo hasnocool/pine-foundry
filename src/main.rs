@@ -271,9 +271,13 @@ struct CatalystEvent {
     confidence: f64,
     title: String,
     url: Option<String>,
+    #[serde(default)]
     baseline_price: f64,
+    #[serde(default)]
     reaction_now_pct: Option<f64>,
+    #[serde(default)]
     reaction_5m_pct: Option<f64>,
+    #[serde(default)]
     reaction_15m_pct: Option<f64>,
 }
 
