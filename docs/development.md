@@ -121,3 +121,8 @@ curl http://127.0.0.1:3000/api/streams/health
 Keep asynchronous work non-blocking. The market, news, filings and journal loops use Tokio timers, WebSockets and asynchronous HTTP. Do not put blocking SDKs or synchronous HTTP clients inside the scanner hot path.
 
 For performance work, benchmark before adding Redis, a database, custom indexes or more threads.
+
+
+## Local environment loading
+
+Pine Foundry loads `.env` automatically at process startup with `dotenvy`. `NEWSAPI` therefore does not need to be exported manually when running `cargo run`.
