@@ -62,7 +62,10 @@ enum MarketSession { PreMarket, Regular, AfterHours, Closed }
 enum Field {
     Price, Change, ChangePctPrevClose, ChangePct1m, ChangePct5m, ChangePct15m,
     DayVolume, Volume1m, SharesFloat, SharesOutstanding, MarketCap, IssueType,
-    SpreadBps, BookImbalance, LiquidityScore, TradeImbalance, Cvd,
+    SpreadBps, BestBid, BestAsk, MidPrice, Microprice,
+    BidDepth5, AskDepth5, BidDepth10, AskDepth10,
+    BookImbalance, LiquidityScore, TradeImbalance, Cvd,
+    TradeCount1m, TradeRate1m, BuyVolume1m, SellVolume1m, Vwap15m,
     CrossVenueDislocationBps, NewsCount5m, NewsCount15m, NewsVelocity,
     NewsSources15m, StreamAgeMs, RelativeVolume15m, Volatility15mPct,
     ExecutableBuy1000, ExecutableSell1000,
@@ -84,10 +87,23 @@ impl Field {
             Self::MarketCap => "Market Cap",
             Self::IssueType => "Issue Type",
             Self::SpreadBps => "Spread (bps)",
+            Self::BestBid => "Best Bid",
+            Self::BestAsk => "Best Ask",
+            Self::MidPrice => "Mid",
+            Self::Microprice => "Microprice",
+            Self::BidDepth5 => "Bid Depth (5)",
+            Self::AskDepth5 => "Ask Depth (5)",
+            Self::BidDepth10 => "Bid Depth (10)",
+            Self::AskDepth10 => "Ask Depth (10)",
             Self::BookImbalance => "Book Imbalance",
             Self::LiquidityScore => "Liquidity",
             Self::TradeImbalance => "Trade Imbalance",
             Self::Cvd => "CVD",
+            Self::TradeCount1m => "Trades (1m)",
+            Self::TradeRate1m => "Trade Rate (1m)",
+            Self::BuyVolume1m => "Buy Volume (1m)",
+            Self::SellVolume1m => "Sell Volume (1m)",
+            Self::Vwap15m => "VWAP (15m)",
             Self::CrossVenueDislocationBps => "Cross-Venue (bps)",
             Self::NewsCount5m => "News (5m)",
             Self::NewsCount15m => "News (15m)",
@@ -178,10 +194,15 @@ struct ScanDefinition {
 fn default_version() -> u32 { 1 }
 
 #[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct MinuteBucket {
     start_ms: i64,
     close_price: f64,
     volume: f64,
+    notional: f64,
+    buy_volume: f64,
+    sell_volume: f64,
+    trade_count: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -245,10 +266,23 @@ struct Metrics {
     change_pct_15m: Option<f64>,
     volume_1m: f64,
     spread_bps: Option<f64>,
+    best_bid: Option<f64>,
+    best_ask: Option<f64>,
+    mid_price: Option<f64>,
+    microprice: Option<f64>,
+    bid_depth_5: f64,
+    ask_depth_5: f64,
+    bid_depth_10: f64,
+    ask_depth_10: f64,
     book_imbalance: Option<f64>,
     liquidity_score: f64,
     trade_imbalance: Option<f64>,
     cvd: f64,
+    trade_count_1m: f64,
+    trade_rate_1m: f64,
+    buy_volume_1m: f64,
+    sell_volume_1m: f64,
+    vwap_15m: Option<f64>,
     cross_venue_dislocation_bps: Option<f64>,
     news_count_5m: f64,
     news_count_15m: f64,
@@ -297,10 +331,23 @@ struct ScannerRow {
     shares_outstanding: Option<f64>,
     market_cap: Option<f64>,
     spread_bps: Option<f64>,
+    best_bid: Option<f64>,
+    best_ask: Option<f64>,
+    mid_price: Option<f64>,
+    microprice: Option<f64>,
+    bid_depth_5: f64,
+    ask_depth_5: f64,
+    bid_depth_10: f64,
+    ask_depth_10: f64,
     book_imbalance: Option<f64>,
     liquidity_score: f64,
     trade_imbalance: Option<f64>,
     cvd: f64,
+    trade_count_1m: f64,
+    trade_rate_1m: f64,
+    buy_volume_1m: f64,
+    sell_volume_1m: f64,
+    vwap_15m: Option<f64>,
     cross_venue_dislocation_bps: Option<f64>,
     news_count_5m: f64,
     news_count_15m: f64,
@@ -408,8 +455,11 @@ fn default_columns() -> Vec<ColumnSpec> {
         Field::Price, Field::Change, Field::ChangePctPrevClose, Field::ChangePct1m,
         Field::ChangePct5m, Field::ChangePct15m, Field::DayVolume, Field::Volume1m,
         Field::SharesFloat, Field::SharesOutstanding, Field::MarketCap,
-        Field::SpreadBps, Field::BookImbalance, Field::LiquidityScore,
-        Field::TradeImbalance, Field::Cvd, Field::CrossVenueDislocationBps,
+        Field::SpreadBps, Field::BestBid, Field::BestAsk, Field::MidPrice, Field::Microprice,
+        Field::BidDepth5, Field::AskDepth5, Field::BidDepth10, Field::AskDepth10,
+        Field::BookImbalance, Field::LiquidityScore,
+        Field::TradeImbalance, Field::Cvd, Field::TradeCount1m, Field::TradeRate1m,
+        Field::BuyVolume1m, Field::SellVolume1m, Field::Vwap15m, Field::CrossVenueDislocationBps,
         Field::NewsCount5m, Field::NewsCount15m, Field::NewsVelocity,
         Field::NewsSources15m, Field::StreamAgeMs, Field::RelativeVolume15m,
         Field::Volatility15mPct, Field::ExecutableBuy1000, Field::ExecutableSell1000,
@@ -713,6 +763,15 @@ fn metrics(s: &SecurityState) -> Metrics {
     };
     let volume_1m = s.minute_buckets.back().map(|b| b.volume).unwrap_or(0.0);
     let book = current_book_metrics(s);
+    let current_bucket = s.minute_buckets.back().cloned().unwrap_or_default();
+    let trade_count_1m = current_bucket.trade_count as f64;
+    let trade_rate_1m = trade_count_1m / (1.0_f64.max(1.0));
+    let buy_volume_1m = current_bucket.buy_volume;
+    let sell_volume_1m = current_bucket.sell_volume;
+    let vwap_buckets = s.minute_buckets.iter().rev().take(15).collect::<Vec<_>>();
+    let vwap_volume = vwap_buckets.iter().map(|bucket| bucket.volume).sum::<f64>();
+    let vwap_notional = vwap_buckets.iter().map(|bucket| bucket.notional).sum::<f64>();
+    let vwap_15m = (vwap_volume > 0.0).then_some(vwap_notional / vwap_volume);
     let (news_count_5m, news_count_15m, news_velocity, news_sources_15m) = news_metrics(s);
     let baseline_buckets = s.minute_buckets.iter().rev().skip(1).take(15).collect::<Vec<_>>();
     let baseline_volume = if baseline_buckets.is_empty() {
@@ -758,9 +817,22 @@ fn metrics(s: &SecurityState) -> Metrics {
         change_pct_15m: find_price(15).and_then(pct),
         volume_1m,
         spread_bps: book.spread_bps,
+        best_bid: book.best_bid,
+        best_ask: book.best_ask,
+        mid_price: book.mid,
+        microprice: book.microprice,
+        bid_depth_5: book.bid_depth_5,
+        ask_depth_5: book.ask_depth_5,
+        bid_depth_10: book.bid_depth_10,
+        ask_depth_10: book.ask_depth_10,
         book_imbalance: book.book_imbalance,
         liquidity_score: book.liquidity_score,
         trade_imbalance,
+        trade_count_1m,
+        trade_rate_1m,
+        buy_volume_1m,
+        sell_volume_1m,
+        vwap_15m,
         cvd: s.cvd,
         cross_venue_dislocation_bps: cross_venue_dislocation_bps(s),
         news_count_5m,
@@ -792,9 +864,22 @@ fn row(s: &SecurityState) -> ScannerRow {
         shares_outstanding: s.shares_outstanding,
         market_cap: s.market_cap,
         spread_bps: m.spread_bps,
+        best_bid: m.best_bid,
+        best_ask: m.best_ask,
+        mid_price: m.mid_price,
+        microprice: m.microprice,
+        bid_depth_5: m.bid_depth_5,
+        ask_depth_5: m.ask_depth_5,
+        bid_depth_10: m.bid_depth_10,
+        ask_depth_10: m.ask_depth_10,
         book_imbalance: m.book_imbalance,
         liquidity_score: m.liquidity_score,
         trade_imbalance: m.trade_imbalance,
+        trade_count_1m: m.trade_count_1m,
+        trade_rate_1m: m.trade_rate_1m,
+        buy_volume_1m: m.buy_volume_1m,
+        sell_volume_1m: m.sell_volume_1m,
+        vwap_15m: m.vwap_15m,
         cvd: m.cvd,
         cross_venue_dislocation_bps: m.cross_venue_dislocation_bps,
         news_count_5m: m.news_count_5m,
@@ -827,10 +912,23 @@ fn field_value(field: Field, s: &SecurityState) -> Option<f64> {
         Field::MarketCap => s.market_cap,
         Field::IssueType => None,
         Field::SpreadBps => m.spread_bps,
+        Field::BestBid => m.best_bid,
+        Field::BestAsk => m.best_ask,
+        Field::MidPrice => m.mid_price,
+        Field::Microprice => m.microprice,
+        Field::BidDepth5 => Some(m.bid_depth_5),
+        Field::AskDepth5 => Some(m.ask_depth_5),
+        Field::BidDepth10 => Some(m.bid_depth_10),
+        Field::AskDepth10 => Some(m.ask_depth_10),
         Field::BookImbalance => m.book_imbalance,
         Field::LiquidityScore => Some(m.liquidity_score),
         Field::TradeImbalance => m.trade_imbalance,
         Field::Cvd => Some(m.cvd),
+        Field::TradeCount1m => Some(m.trade_count_1m),
+        Field::TradeRate1m => Some(m.trade_rate_1m),
+        Field::BuyVolume1m => Some(m.buy_volume_1m),
+        Field::SellVolume1m => Some(m.sell_volume_1m),
+        Field::Vwap15m => m.vwap_15m,
         Field::CrossVenueDislocationBps => m.cross_venue_dislocation_bps,
         Field::NewsCount5m => Some(m.news_count_5m),
         Field::NewsCount15m => Some(m.news_count_15m),
@@ -880,10 +978,23 @@ fn compare_rows(a: &ScannerRow, b: &ScannerRow, sort: &SortSpec) -> std::cmp::Or
             Field::MarketCap => r.market_cap,
             Field::IssueType => None,
             Field::SpreadBps => r.spread_bps,
+            Field::BestBid => r.best_bid,
+            Field::BestAsk => r.best_ask,
+            Field::MidPrice => r.mid_price,
+            Field::Microprice => r.microprice,
+            Field::BidDepth5 => Some(r.bid_depth_5),
+            Field::AskDepth5 => Some(r.ask_depth_5),
+            Field::BidDepth10 => Some(r.bid_depth_10),
+            Field::AskDepth10 => Some(r.ask_depth_10),
             Field::BookImbalance => r.book_imbalance,
             Field::LiquidityScore => Some(r.liquidity_score),
             Field::TradeImbalance => r.trade_imbalance,
             Field::Cvd => Some(r.cvd),
+            Field::TradeCount1m => Some(r.trade_count_1m),
+            Field::TradeRate1m => Some(r.trade_rate_1m),
+            Field::BuyVolume1m => Some(r.buy_volume_1m),
+            Field::SellVolume1m => Some(r.sell_volume_1m),
+            Field::Vwap15m => r.vwap_15m,
             Field::CrossVenueDislocationBps => r.cross_venue_dislocation_bps,
             Field::NewsCount5m => Some(r.news_count_5m),
             Field::NewsCount15m => Some(r.news_count_15m),
@@ -909,10 +1020,37 @@ fn compare_rows(a: &ScannerRow, b: &ScannerRow, sort: &SortSpec) -> std::cmp::Or
 fn minute_update(s: &mut SecurityState, ts_ms: i64, price: f64, volume: f64) {
     let start = (ts_ms / 60_000) * 60_000;
     match s.minute_buckets.back_mut() {
-        Some(b) if b.start_ms == start => { b.close_price = price; b.volume += volume; }
+        Some(b) if b.start_ms == start => {
+            b.close_price = price;
+            b.volume += volume;
+            b.notional += price * volume;
+        }
         _ => {
-            s.minute_buckets.push_back(MinuteBucket { start_ms: start, close_price: price, volume });
+            s.minute_buckets.push_back(MinuteBucket {
+                start_ms: start,
+                close_price: price,
+                volume,
+                notional: price * volume,
+                ..Default::default()
+            });
             while s.minute_buckets.len() > 20 { s.minute_buckets.pop_front(); }
+        }
+    }
+}
+
+fn minute_trade_flow_update(
+    s: &mut SecurityState,
+    ts_ms: i64,
+    size: f64,
+    side: Option<streams::TradeSide>,
+) {
+    let start = (ts_ms / 60_000) * 60_000;
+    if let Some(bucket) = s.minute_buckets.back_mut().filter(|bucket| bucket.start_ms == start) {
+        bucket.trade_count += 1;
+        match side {
+            Some(streams::TradeSide::Buy) => bucket.buy_volume += size,
+            Some(streams::TradeSide::Sell) => bucket.sell_volume += size,
+            None => {}
         }
     }
 }
@@ -1012,6 +1150,7 @@ fn apply_event(
                 None => {}
             }
             minute_update(s, *ts_ms, *price, *size);
+            minute_trade_flow_update(s, *ts_ms, *size, side);
             update_venue(s, provider, venue, Some(*price), None, None, None, *ts_ms, sequence);
             let crypto_provider = matches!(
                 provider,
@@ -2551,6 +2690,7 @@ mod tests {
                 start_ms: ((now - (15 - i) * 60_000) / 60_000) * 60_000,
                 close_price: 9.0 + i as f64 * 0.05,
                 volume: 10_000.0,
+                ..Default::default()
             });
         }
         let m = metrics(&state);
