@@ -96,6 +96,10 @@ type SymbolEvidence = {
     confidence: number;
     title: string;
     url: string | null;
+    baseline_price: number;
+    reaction_now_pct: number | null;
+    reaction_5m_pct: number | null;
+    reaction_15m_pct: number | null;
   }>;
   venues: EvidenceVenue[];
   recent_news: NewsArticle[];
@@ -224,7 +228,7 @@ function renderEvidence() {
           <div class="catalyst-row">
             <span>${escapeHtml(c.category)}</span>
             <strong>${escapeHtml(c.title)}</strong>
-            <small>${escapeHtml(c.source)} · ${(c.confidence * 100).toFixed(0)}%</small>
+            <small>${escapeHtml(c.source)} · ${(c.confidence * 100).toFixed(0)}% · now ${fmt(c.reaction_now_pct, "pct")} · 5m ${fmt(c.reaction_5m_pct, "pct")} · 15m ${fmt(c.reaction_15m_pct, "pct")}</small>
           </div>`).join("") || "<p class='muted'>No recent catalysts.</p>"}
       </div>
       <div class="evidence-news">
