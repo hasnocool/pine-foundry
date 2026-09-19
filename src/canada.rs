@@ -1,10 +1,9 @@
 // src/canada.rs
-use crate::{journal::{EventJournal, JournalRecord}, news::{NewsArticle, NewsRouter}, now_ms};
+use crate::{journal::EventJournal, news::{NewsArticle, NewsRouter}, now_ms};
 use futures_util::stream::{self, StreamExt};
 use serde::Serialize;
 use std::{collections::HashSet, env, sync::Arc};
 use tokio::{sync::RwLock, time::{sleep, Duration}};
-use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CanadianDisclosureHealth {
@@ -72,20 +71,6 @@ impl CanadianDisclosureRouter {
         }
         if seen.len() > 10_000 { seen.clear(); }
 
-        for article in &fresh {
-            if let Ok(payload) = serde_json::to_value(article) {
-                self.journal.append(JournalRecord {
-                    event_id: Uuid::new_v4().to_string(),
-                    received_at_ms: now_ms(),
-                    kind: "canada_disclosure".to_string(),
-                    symbol: article.ticker.clone(),
-                    provider: Some("canada_disclosure".to_string()),
-                    venue: article.source.clone(),
-                    sequence: None,
-                    payload,
-                });
-            }
-        }
         fresh
     }
 }
