@@ -250,6 +250,26 @@ mod tests {
     }
 
     #[test]
+    fn executable_depth_uses_notional_budget() {
+        let mut book = OrderBookState::default();
+        book.replace(
+            vec![
+                BookLevel { price: 99.0, quantity: 20.0 },
+                BookLevel { price: 98.0, quantity: 20.0 },
+            ],
+            vec![
+                BookLevel { price: 101.0, quantity: 5.0 },
+                BookLevel { price: 102.0, quantity: 20.0 },
+            ],
+            Some(1),
+            1,
+        );
+        let metrics = book.metrics();
+        assert!(metrics.executable_buy_1000 > 9.0);
+        assert!(metrics.executable_sell_1000 > 9.0);
+    }
+
+    #[test]
     fn detects_sequence_gap() {
         let mut book = OrderBookState::default();
         book.replace(
