@@ -707,6 +707,17 @@ fn compare_rows(a: &ScannerRow, b: &ScannerRow, sort: &SortSpec) -> std::cmp::Or
             Field::SharesOutstanding => r.shares_outstanding,
             Field::MarketCap => r.market_cap,
             Field::IssueType => None,
+            Field::SpreadBps => r.spread_bps,
+            Field::BookImbalance => r.book_imbalance,
+            Field::LiquidityScore => Some(r.liquidity_score),
+            Field::TradeImbalance => r.trade_imbalance,
+            Field::Cvd => Some(r.cvd),
+            Field::CrossVenueDislocationBps => r.cross_venue_dislocation_bps,
+            Field::NewsCount5m => Some(r.news_count_5m),
+            Field::NewsCount15m => Some(r.news_count_15m),
+            Field::NewsVelocity => Some(r.news_velocity),
+            Field::NewsSources15m => Some(r.news_sources_15m),
+            Field::StreamAgeMs => Some(r.stream_age_ms),
         }
     };
     let order = match (val(a), val(b)) {
@@ -730,13 +741,93 @@ fn minute_update(s: &mut SecurityState, ts_ms: i64, price: f64, volume: f64) {
     }
 }
 
-fn apply_event(s: &mut SecurityState, event: &MarketEvent) {
+fn update_venue(
+    s: &mut SecurityState,
+    provider: providers::ProviderId,
+    venue: &str,
+    price: Option<f64>,
+    bid: Option<f64>,
+    ask: Option<f64>,
+    day_volume: Option<f64>,
+    ts_ms: i64,
+    sequence: Option<u64>,
+) {
+    let key = venue.to_ascii_lowercase();
+    let entry = s
+        .venues
+        .entry(key)
+        .or_insert_with(|| VenueState::new(provider, venue, ts_ms));
+    if price.is_some() {
+        entry.last_price = price;
+    }
+    if bid.is_some() {
+        entry.bid = bid;
+    }
+    if ask.is_some() {
+        entry.ask = ask;
+    }
+    if let Some(volume) = day_volume {
+        entry.day_volume = volume;
+    }
+    entry.last_event_ms = ts_ms;
+    entry.last_sequence = sequence.or(entry.last_sequence);
+
+    let is_primary = matches!(
+        provider,
+        providers::ProviderId::Binance
+            if crypto_primary_provider() == "binance"
+    ) || matches!(
+        provider,
+        providers::ProviderId::Kraken
+            if crypto_primary_provider() == "kraken"
+    ) || matches!(
+        provider,
+        providers::ProviderId::Coinbase
+            if crypto_primary_provider() == "coinbase"
+    );
+
+    if is_primary || s.last_price <= 0.0 {
+        if let Some(value) = price {
+            s.last_price = value;
+        } else if let (Some(bid), Some(ask)) = (bid, ask) {
+            s.last_price = (bid + ask) / 2.0;
+        }
+    }
+}
+
+fn apply_event(
+    s: &mut SecurityState,
+    event: &MarketEvent,
+    provider: providers::ProviderId,
+    venue: &str,
+    sequence: Option<u64>,
+    side: Option<streams::TradeSide>,
+) {
     match event {
         MarketEvent::Quote { ts_ms, price, session, .. } => {
-            s.last_price = *price; s.session = *session; s.last_updated_ms = *ts_ms; minute_update(s, *ts_ms, *price, 0.0);
+            s.session = *session;
+            s.last_updated_ms = *ts_ms;
+            minute_update(s, *ts_ms, *price, 0.0);
+            update_venue(s, provider, venue, Some(*price), None, None, None, *ts_ms, sequence);
         }
         MarketEvent::Trade { ts_ms, price, size, session, .. } => {
-            s.last_price = *price; s.session = *session; s.last_updated_ms = *ts_ms; s.day_volume += *size; minute_update(s, *ts_ms, *price, *size);
+            s.session = *session;
+            s.last_updated_ms = *ts_ms;
+            s.day_volume += *size;
+            s.trade_count += 1;
+            match side {
+                Some(streams::TradeSide::Buy) => {
+                    s.buy_volume += *size;
+                    s.cvd += *size;
+                }
+                Some(streams::TradeSide::Sell) => {
+                    s.sell_volume += *size;
+                    s.cvd -= *size;
+                }
+                None => {}
+            }
+            minute_update(s, *ts_ms, *price, *size);
+            update_venue(s, provider, venue, Some(*price), None, None, None, *ts_ms, sequence);
         }
         MarketEvent::Reference { ts_ms, issue_type, shares_float, shares_outstanding, market_cap, previous_close, day_volume, .. } => {
             s.last_updated_ms = *ts_ms;
