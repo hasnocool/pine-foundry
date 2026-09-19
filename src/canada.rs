@@ -2,7 +2,7 @@
 use crate::{journal::{EventJournal, JournalRecord}, news::{NewsArticle, NewsRouter}, now_ms};
 use futures_util::stream::{self, StreamExt};
 use serde::Serialize;
-use std::{env, sync::Arc};
+use std::{collections::HashSet, env, sync::Arc};
 use tokio::{sync::RwLock, time::{sleep, Duration}};
 use uuid::Uuid;
 
@@ -17,6 +17,7 @@ pub struct CanadianDisclosureRouter {
     news: Arc<NewsRouter>,
     journal: Arc<EventJournal>,
     health: Arc<RwLock<CanadianDisclosureHealth>>,
+    seen: Arc<RwLock<HashSet<String>>>,
 }
 
 impl CanadianDisclosureRouter {
@@ -24,7 +25,7 @@ impl CanadianDisclosureRouter {
         Self { news, journal, health: Arc::new(RwLock::new(CanadianDisclosureHealth {
             status: "unprobed".to_string(), requests: 0, successes: 0, failures: 0,
             last_success_ms: None, last_error: None,
-        })) }
+        })), seen: Arc::new(RwLock::new(HashSet::new())) }
     }
 
     pub async fn health(&self) -> CanadianDisclosureHealth { self.health.read().await.clone() }
@@ -61,7 +62,17 @@ impl CanadianDisclosureRouter {
             }
         }
 
-        for article in &collected {
+        let mut seen = self.seen.write().await;
+        let mut fresh = Vec::new();
+        for article in collected {
+            let key = article.url.trim().to_ascii_lowercase();
+            if seen.insert(key) {
+                fresh.push(article);
+            }
+        }
+        if seen.len() > 10_000 { seen.clear(); }
+
+        for article in &fresh {
             if let Ok(payload) = serde_json::to_value(article) {
                 self.journal.append(JournalRecord {
                     event_id: Uuid::new_v4().to_string(),
@@ -75,7 +86,7 @@ impl CanadianDisclosureRouter {
                 });
             }
         }
-        collected
+        fresh
     }
 }
 
