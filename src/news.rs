@@ -1,5 +1,5 @@
 // src/news.rs
-use chrono::DateTime;
+use chrono::{DateTime, Duration as ChronoDuration};
 use futures_util::stream::{self, StreamExt};
 use quick_xml::{events::Event, reader::Reader};
 use reqwest::Client;
@@ -219,9 +219,19 @@ impl NewsRouter {
     ) -> Result<Vec<NewsArticle>, String> {
         let api_key = newsapi_key()
             .ok_or_else(|| "NEWSAPI or NEWSAPI_KEY is not configured".to_string())?;
+        let lookback_hours = env::var("PINE_FOUNDRY_NEWS_LOOKBACK_HOURS")
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or(24)
+            .clamp(1, 24 * 365);
+        let from = DateTime::from_timestamp_millis(now_ms())
+            .map(|value| value - ChronoDuration::hours(lookback_hours))
+            .map(|value| value.to_rfc3339())
+            .unwrap_or_default();
         let url = format!(
-            "https://newsapi.org/v2/everything?q={}&language=en&sortBy=publishedAt&pageSize={}",
+            "https://newsapi.org/v2/everything?q={}&from={}&language=en&sortBy=publishedAt&pageSize={}",
             urlencoding::encode(query),
+            urlencoding::encode(&from),
             limit.clamp(1, 100)
         );
         let value = self
@@ -232,6 +242,15 @@ impl NewsRouter {
                     .header("X-Api-Key", api_key),
             )
             .await?;
+
+        if value.get("status").and_then(Value::as_str) == Some("error") {
+            let message = value
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("NewsAPI returned an error");
+            record_failure(&self.health, "newsapi", message).await;
+            return Err(format!("newsapi: {message}"));
+        }
 
         let mut articles = parse_newsapi_json(&value, query, ticker);
         articles.truncate(limit.clamp(1, 100));
@@ -290,12 +309,14 @@ impl NewsRouter {
         request: reqwest::RequestBuilder,
     ) -> Result<String, String> {
         self.record_request(provider).await;
-        let response = request
-            .send()
-            .await
-            .map_err(|error| {
-                error.to_string()
-            })?;
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                let message = error.to_string();
+                record_failure(&self.health, provider, &message).await;
+                return Err(format!("{provider}: {message}"));
+            }
+        };
 
         if !response.status().is_success() {
             let message = format!("HTTP {}", response.status());
@@ -303,7 +324,14 @@ impl NewsRouter {
             return Err(format!("{provider}: {message}"));
         }
 
-        let text = response.text().await.map_err(|error| error.to_string())?;
+        let text = match response.text().await {
+            Ok(text) => text,
+            Err(error) => {
+                let message = error.to_string();
+                record_failure(&self.health, provider, &message).await;
+                return Err(format!("{provider}: {message}"));
+            }
+        };
         record_success(&self.health, provider).await;
         Ok(text)
     }
