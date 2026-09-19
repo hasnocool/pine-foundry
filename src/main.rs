@@ -1,5 +1,4 @@
 // src/main.rs
-mod providers;
 use axum::{
     extract::{ws::{Message, WebSocket, WebSocketUpgrade}, Path, State},
     http::StatusCode,
@@ -8,8 +7,7 @@ use axum::{
     Json, Router,
 };
 use clap::{Parser, Subcommand};
-use futures_util::{SinkExt, StreamExt};
-use providers::{ProviderHealth, PublicProviderRouter, PublicQuote};
+use futures_util::SinkExt;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -34,7 +32,6 @@ struct Cli {
 enum Command {
     Serve,
     Presets,
-    Providers,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -197,7 +194,7 @@ enum MarketEvent {
     Reference {
         symbol: String, ts_ms: i64, issue_type: Option<IssueType>,
         shares_float: Option<f64>, shares_outstanding: Option<f64>,
-        market_cap: Option<f64>, previous_close: Option<f64>, day_volume: Option<f64>,
+        market_cap: Option<f64>, previous_close: Option<f64>,
     },
 }
 
@@ -235,7 +232,6 @@ struct AppState {
     market: Arc<RwLock<HashMap<String, SecurityState>>>,
     scans: Arc<RwLock<HashMap<Uuid, ScanRuntime>>>,
     presets: Arc<PresetStore>,
-    providers: Arc<PublicProviderRouter>,
 }
 
 struct PresetStore {
@@ -336,22 +332,6 @@ impl SecurityState {
             shares_float: Some(float),
             shares_outstanding: Some(outstanding),
             market_cap: Some(cap),
-            last_updated_ms: now,
-            minute_buckets: VecDeque::with_capacity(20),
-        }
-    }
-
-    fn blank(symbol: &str, price: f64, session: MarketSession, now: i64) -> Self {
-        Self {
-            symbol: symbol.to_string(),
-            issue_type: IssueType::CommonStock,
-            session,
-            last_price: price,
-            previous_close: None,
-            day_volume: 0.0,
-            shares_float: None,
-            shares_outstanding: None,
-            market_cap: None,
             last_updated_ms: now,
             minute_buckets: VecDeque::with_capacity(20),
         }
@@ -525,14 +505,13 @@ fn apply_event(s: &mut SecurityState, event: &MarketEvent) {
         MarketEvent::Trade { ts_ms, price, size, session, .. } => {
             s.last_price = *price; s.session = *session; s.last_updated_ms = *ts_ms; s.day_volume += *size; minute_update(s, *ts_ms, *price, *size);
         }
-        MarketEvent::Reference { ts_ms, issue_type, shares_float, shares_outstanding, market_cap, previous_close, day_volume, .. } => {
+        MarketEvent::Reference { ts_ms, issue_type, shares_float, shares_outstanding, market_cap, previous_close, .. } => {
             s.last_updated_ms = *ts_ms;
             if let Some(v) = issue_type { s.issue_type = *v; }
             if shares_float.is_some() { s.shares_float = *shares_float; }
             if shares_outstanding.is_some() { s.shares_outstanding = *shares_outstanding; }
             if market_cap.is_some() { s.market_cap = *market_cap; }
             if previous_close.is_some() { s.previous_close = *previous_close; }
-            if let Some(volume) = day_volume { s.day_volume = *volume; }
         }
     }
 }
@@ -557,28 +536,10 @@ impl ScanRuntime {
 }
 
 #[derive(Debug, Serialize)]
-struct Health {
-    ok: bool,
-    service: &'static str,
-    feed_mode: String,
-    providers: Vec<ProviderHealth>,
-}
+struct Health { ok: bool, service: &'static str, mock_feed: bool }
 
-async fn health(State(s): State<AppState>) -> Json<Health> {
-    Json(Health {
-        ok: true,
-        service: "pine-foundry",
-        feed_mode: env::var("PINE_FOUNDRY_FEED").unwrap_or_else(|_| "auto".into()),
-        providers: s.providers.health().await,
-    })
-}
-
-async fn provider_health(State(s): State<AppState>) -> Json<Vec<ProviderHealth>> {
-    Json(s.providers.health().await)
-}
-
-async fn provider_routes() -> Json<Vec<providers::PublicProviderRoute>> {
-    Json(PublicProviderRouter::routes())
+async fn health() -> Json<Health> {
+    Json(Health { ok: true, service: "pine-foundry", mock_feed: true })
 }
 
 async fn list_presets(State(s): State<AppState>) -> Json<Vec<Preset>> { Json(s.presets.list().await) }
@@ -666,53 +627,6 @@ async fn make_snapshot(s: &AppState, id: Uuid) -> Result<ScannerEvent, String> {
     scans.get(&id).map(|scan| scan.snapshot(states.into_iter())).ok_or_else(|| "scan not found".into())
 }
 
-async fn publish_market_state(s: &AppState, updated: SecurityState) {
-    let symbol = updated.symbol.clone();
-    let mut scans = s.scans.write().await;
-    for scan in scans.values_mut() {
-        let before = scan.matches.contains(&symbol);
-        let after = matches_scan(&scan.definition, &updated);
-        match (before, after) {
-            (false, true) => {
-                scan.matches.insert(symbol.clone());
-                let _ = scan.tx.send(ScannerEvent::ResultAdded { scan_id: scan.id, row: row(&updated) });
-            }
-            (true, false) => {
-                scan.matches.remove(&symbol);
-                let _ = scan.tx.send(ScannerEvent::ResultRemoved { scan_id: scan.id, symbol: symbol.clone() });
-            }
-            (true, true) => {
-                let _ = scan.tx.send(ScannerEvent::ResultUpdated { scan_id: scan.id, row: row(&updated) });
-            }
-            (false, false) => {}
-        }
-    }
-}
-
-async fn ingest_public_quote(s: &AppState, quote: PublicQuote) {
-    let session = configured_live_session();
-    let updated = {
-        let mut market = s.market.write().await;
-        let state = market.entry(quote.symbol.clone())
-            .or_insert_with(|| SecurityState::blank(&quote.symbol, quote.price, session, quote.ts_ms));
-        let old_volume = state.day_volume;
-        state.last_price = quote.price;
-        state.previous_close = quote.previous_close.or(state.previous_close);
-        state.shares_float = quote.shares_float.or(state.shares_float);
-        state.shares_outstanding = quote.shares_outstanding.or(state.shares_outstanding);
-        state.market_cap = quote.market_cap.or(state.market_cap);
-        state.session = session;
-        if let Some(volume) = quote.volume {
-            state.day_volume = volume.max(0.0);
-        }
-        let volume_delta = (state.day_volume - old_volume).max(0.0);
-        state.last_updated_ms = quote.ts_ms;
-        minute_update(state, quote.ts_ms, quote.price, volume_delta);
-        state.clone()
-    };
-    publish_market_state(s, updated).await;
-}
-
 async fn ingest(s: &AppState, event: MarketEvent) {
     let symbol = match &event {
         MarketEvent::Quote { symbol, .. } | MarketEvent::Trade { symbol, .. } | MarketEvent::Reference { symbol, .. } => symbol,
@@ -741,99 +655,6 @@ async fn ingest(s: &AppState, event: MarketEvent) {
             }
             (false, false) => {}
         }
-    }
-}
-
-async fn live_feed(s: AppState) {
-    let provider = s.providers.clone();
-    let poll_secs = env::var("PINE_FOUNDRY_POLL_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(5)
-        .max(1);
-    let page_size = env::var("PINE_FOUNDRY_TV_PAGE_SIZE")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(5_000)
-        .clamp(100, 10_000);
-    let max_rows = env::var("PINE_FOUNDRY_TV_MAX_ROWS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(20_000)
-        .min(50_000);
-    let mut interval = time::interval(Duration::from_secs(poll_secs));
-
-    loop {
-        interval.tick().await;
-        let mut delivered = 0usize;
-        let mut start = 0usize;
-
-        while start < max_rows {
-            let end = (start + page_size).min(max_rows);
-            match provider.tradingview_scan_us(start, end).await {
-                Ok(quotes) => {
-                    let count = quotes.len();
-                    for quote in quotes {
-                        ingest_public_quote(&s, quote).await;
-                    }
-                    delivered += count;
-                    if count < page_size {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-            start += page_size;
-        }
-
-        if delivered == 0 {
-            let symbols: Vec<String> = {
-                let market = s.market.read().await;
-                market.keys().take(100).cloned().collect()
-            };
-
-            match provider.yahoo_spark(&symbols).await {
-                Ok(quotes) if !quotes.is_empty() => {
-                    delivered = quotes.len();
-                    for quote in quotes {
-                        ingest_public_quote(&s, quote).await;
-                    }
-                }
-                _ => {
-                    let results = futures_util::stream::iter(symbols)
-                        .map(|symbol| {
-                            let provider = provider.clone();
-                            async move {
-                                provider.nasdaq_quote(&symbol).await.ok().flatten()
-                            }
-                        })
-                        .buffer_unordered(8)
-                        .collect::<Vec<_>>()
-                        .await;
-                    for quote in results.into_iter().flatten() {
-                        ingest_public_quote(&s, quote).await;
-                        delivered += 1;
-                    }
-                }
-            }
-        }
-
-        if delivered == 0 {
-            eprintln!("live feed: all public providers failed this cycle; retaining last state");
-        }
-    }
-}
-
-fn configured_live_session() -> MarketSession {
-    match env::var("PINE_FOUNDRY_SESSION")
-        .unwrap_or_else(|_| "regular".into())
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "pre" | "premarket" | "pre_market" => MarketSession::PreMarket,
-        "after" | "afterhours" | "after_hours" => MarketSession::AfterHours,
-        "closed" => MarketSession::Closed,
-        _ => MarketSession::Regular,
     }
 }
 
@@ -911,18 +732,14 @@ async fn shutdown_signal() {
 async fn run_server() {
     let address = env::var("PINE_FOUNDRY_ADDR").unwrap_or_else(|_| "127.0.0.1:3000".into());
     let data_dir = PathBuf::from(env::var("PINE_FOUNDRY_DATA_DIR").unwrap_or_else(|_| "data".into()));
-    let provider = Arc::new(PublicProviderRouter::new().expect("public provider client"));
     let state = AppState {
         market: Arc::new(RwLock::new(seed_market())),
         scans: Arc::new(RwLock::new(HashMap::new())),
         presets: Arc::new(PresetStore::load(data_dir.join("presets.json")).await),
-        providers: provider,
     };
 
     let app = Router::new()
         .route("/health", get(health))
-        .route("/api/providers", get(provider_routes))
-        .route("/api/providers/health", get(provider_health))
         .route("/api/presets", get(list_presets).post(create_preset))
         .route("/api/presets/:id", delete(delete_preset))
         .route("/api/scans", get(list_scans).post(create_scan))
@@ -933,14 +750,7 @@ async fn run_server() {
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
-    match env::var("PINE_FOUNDRY_FEED").unwrap_or_else(|_| "auto".into()).to_ascii_lowercase().as_str() {
-        "mock" => {
-            tokio::spawn(mock_feed(state.clone()));
-        }
-        _ => {
-            tokio::spawn(live_feed(state.clone()));
-        }
-    }
+    tokio::spawn(mock_feed(state.clone()));
     let addr: SocketAddr = address.parse().expect("PINE_FOUNDRY_ADDR must be host:port");
     println!("Pine Foundry listening on http://{addr}");
     let listener = tokio::net::TcpListener::bind(addr).await.expect("bind");
@@ -948,15 +758,7 @@ async fn run_server() {
 }
 
 fn print_presets() {
-    for p in builtin_presets() {
-        println!("{}\t{}", p.name, p.id);
-    }
-}
-
-fn print_providers() {
-    for route in PublicProviderRouter::routes() {
-        println!("{:?}\t{}\t{}", route.provider, route.route, route.purpose);
-    }
+    for p in builtin_presets() { println!("{}\t{}", p.name, p.id); }
 }
 
 #[tokio::main]
@@ -964,7 +766,6 @@ async fn main() {
     match Cli::parse().command.unwrap_or(Command::Serve) {
         Command::Serve => run_server().await,
         Command::Presets => print_presets(),
-        Command::Providers => print_providers(),
     }
 }
 
