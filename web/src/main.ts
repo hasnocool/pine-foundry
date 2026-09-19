@@ -7,7 +7,8 @@ type Field =
   | "shares_float" | "shares_outstanding" | "market_cap" | "issue_type"
   | "spread_bps" | "book_imbalance" | "liquidity_score" | "trade_imbalance"
   | "cvd" | "cross_venue_dislocation_bps" | "news_count_5m" | "news_count_15m"
-  | "news_velocity" | "news_sources_15m" | "stream_age_ms";
+  | "news_velocity" | "news_sources_15m" | "stream_age_ms" | "relative_volume_15m"
+  | "volatility_15m_pct" | "executable_buy_1000" | "executable_sell_1000";
 type Filter = { field: Field; enabled: boolean; min: number | null; max: number | null; equals?: string | null };
 type Column = { field: Field; width: number; visible: boolean };
 type Definition = {
@@ -42,6 +43,10 @@ type Row = {
   news_velocity: number;
   news_sources_15m: number;
   stream_age_ms: number;
+  relative_volume_15m: number;
+  volatility_15m_pct: number;
+  executable_buy_1000: number;
+  executable_sell_1000: number;
 };
 type Preset = { id: string; name: string; builtin: boolean; definition: Definition };
 type NewsArticle = {
@@ -115,11 +120,13 @@ const labels: Record<Field, string> = {
   cvd: "CVD", cross_venue_dislocation_bps: "Cross-Venue (bps)",
   news_count_5m: "News (5m)", news_count_15m: "News (15m)",
   news_velocity: "News Velocity %", news_sources_15m: "News Sources (15m)",
-  stream_age_ms: "Stream Age (ms)"
+  stream_age_ms: "Stream Age (ms)", relative_volume_15m: "Relative Volume (15m)",
+  volatility_15m_pct: "Volatility (15m) %", executable_buy_1000: "Exec Buy $1K",
+  executable_sell_1000: "Exec Sell $1K"
 };
 const pctFields = new Set<Field>([
   "change_pct_prev_close","change_pct_1m","change_pct_5m","change_pct_15m",
-  "book_imbalance","trade_imbalance","news_velocity"
+  "book_imbalance","trade_imbalance","news_velocity","volatility_15m_pct"
 ]);
 const state = {
   scanId: "",
@@ -186,7 +193,8 @@ function defaultColumns(): Column[] {
   return [
     "price","change","change_pct_5m","day_volume","volume_1m",
     "shares_float","market_cap","spread_bps","book_imbalance",
-    "trade_imbalance","liquidity_score","news_count_5m","news_velocity",
+    "trade_imbalance","liquidity_score","relative_volume_15m","volatility_15m_pct",
+    "executable_buy_1000","executable_sell_1000","news_count_5m","news_velocity",
     "news_sources_15m","stream_age_ms"
   ].map(field => ({ field: field as Field, width: 120, visible: true }));
 }
