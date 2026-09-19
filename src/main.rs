@@ -5,6 +5,7 @@ mod news;
 mod orderbook;
 mod journal;
 mod filings;
+mod canada;
 use axum::{
     extract::{ws::{Message, WebSocket, WebSocketUpgrade}, Path, Query, State},
     http::StatusCode,
@@ -14,6 +15,7 @@ use axum::{
 };
 use clap::{Parser, Subcommand};
 use futures_util::{SinkExt, StreamExt};
+use canada::{CanadianDisclosureHealth, CanadianDisclosureRouter};
 use filings::{FilingEvent, FilingHealth, SecFilingRouter};
 use journal::{EventJournal, JournalRecord};
 use news::{NewsArticle, NewsProviderHealth, NewsRouter};
@@ -320,6 +322,7 @@ struct AppState {
     providers: Arc<PublicProviderRouter>,
     news: Arc<NewsRouter>,
     filings: Arc<SecFilingRouter>,
+    canada: Arc<CanadianDisclosureRouter>,
     journal: Arc<EventJournal>,
     streams: Arc<streams::StreamHealthStore>,
 }
@@ -908,6 +911,7 @@ struct Health {
     streams: Vec<streams::StreamHealth>,
     news: Vec<NewsProviderHealth>,
     filings: FilingHealth,
+    canada: CanadianDisclosureHealth,
 }
 
 async fn health(State(s): State<AppState>) -> Json<Health> {
@@ -919,6 +923,7 @@ async fn health(State(s): State<AppState>) -> Json<Health> {
         streams: s.streams.health().await,
         news: s.news.health().await,
         filings: s.filings.health().await,
+        canada: s.canada.health().await,
     })
 }
 
@@ -969,6 +974,17 @@ async fn symbol_evidence(
         venues,
         recent_news,
     }))
+}
+
+async fn canadian_disclosure_search(
+    State(s): State<AppState>,
+    Path(ticker): Path<String>,
+) -> Result<Json<Vec<NewsArticle>>, (StatusCode, String)> {
+    s.canada
+        .search_ticker(&ticker, 25)
+        .await
+        .map(Json)
+        .map_err(internal_error)
 }
 
 async fn stream_health(State(s): State<AppState>) -> Json<Vec<streams::StreamHealth>> {
@@ -1937,6 +1953,7 @@ async fn run_server() {
     let journal = Arc::new(EventJournal::spawn(data_dir.join("events")));
     let news = Arc::new(NewsRouter::new().expect("public news client"));
     let filings = Arc::new(SecFilingRouter::new(journal.clone()).expect("SEC client"));
+    let canada = Arc::new(CanadianDisclosureRouter::new(news.clone(), journal.clone()));
     let stream_store = Arc::new(streams::StreamHealthStore::new());
     let state = AppState {
         market: Arc::new(RwLock::new(seed_market())),
@@ -1945,6 +1962,7 @@ async fn run_server() {
         providers: provider,
         news,
         filings,
+        canada,
         journal,
         streams: stream_store,
     };
@@ -1957,6 +1975,7 @@ async fn run_server() {
         .route("/api/evidence/:symbol", get(symbol_evidence))
         .route("/api/filings/health", get(filing_health))
         .route("/api/filings/:ticker", get(filing_search))
+        .route("/api/canada/disclosures/:ticker", get(canadian_disclosure_search))
         .route("/api/providers/yahoo/:symbol", get(api_yahoo_quote))
         .route("/api/providers/yahoo/fx/:symbol", get(api_yahoo_fx))
         .route("/api/providers/tradingview/canada/:start/:end", get(api_tradingview_canada))
@@ -2000,6 +2019,7 @@ async fn run_server() {
 
     tokio::spawn(news::run_news_feed(state.news.clone(), state.clone()));
     tokio::spawn(filings::run_sec_feed(state.filings.clone()));
+    tokio::spawn(canada::run_canadian_disclosure_feed(state.canada.clone()));
     match env::var("PINE_FOUNDRY_FEED").unwrap_or_else(|_| "auto".into()).to_ascii_lowercase().as_str() {
         "mock" => {
             tokio::spawn(mock_feed(state.clone()));
@@ -2048,6 +2068,10 @@ async fn run_replay(date: String) {
         providers: Arc::new(PublicProviderRouter::new().expect("public provider client")),
         news: Arc::new(NewsRouter::new().expect("public news client")),
         filings: Arc::new(SecFilingRouter::new(journal.clone()).expect("SEC client")),
+        canada: Arc::new(CanadianDisclosureRouter::new(
+            Arc::new(NewsRouter::new().expect("replay news client")),
+            journal.clone(),
+        )),
         journal,
         streams: Arc::new(streams::StreamHealthStore::new()),
     };
