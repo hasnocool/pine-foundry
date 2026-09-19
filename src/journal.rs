@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{atomic::{AtomicU64, Ordering}, Arc},
 };
 use tokio::{
     fs::{self, OpenOptions},
@@ -25,13 +25,15 @@ pub struct JournalRecord {
 
 #[derive(Clone)]
 pub struct EventJournal {
-    tx: mpsc::UnboundedSender<JournalRecord>,
+    tx: mpsc::Sender<JournalRecord>,
     root: Arc<PathBuf>,
+    dropped: Arc<AtomicU64>,
 }
 
 impl EventJournal {
     pub fn spawn(root: PathBuf) -> Self {
-        let (tx, mut rx) = mpsc::unbounded_channel::<JournalRecord>();
+        let (tx, mut rx) = mpsc::channel::<JournalRecord>(8192);
+        let dropped = Arc::new(AtomicU64::new(0));
         let root_arc = Arc::new(root.clone());
 
         tokio::spawn(async move {
@@ -45,11 +47,18 @@ impl EventJournal {
         Self {
             tx,
             root: root_arc,
+            dropped,
         }
     }
 
     pub fn append(&self, record: JournalRecord) {
-        let _ = self.tx.send(record);
+        if self.tx.try_send(record).is_err() {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
     }
 
     pub fn root(&self) -> &Path {
