@@ -69,7 +69,13 @@ const labels: Record<Field, string> = {
   price: "Price", change: "Change", change_pct_prev_close: "Chg% (Prev-Close)",
   change_pct_1m: "Chg% (1m)", change_pct_5m: "Chg% (5m)", change_pct_15m: "Chg% (15m)",
   day_volume: "Day Volume", volume_1m: "Volume (1m)", shares_float: "Shares Float",
-  shares_outstanding: "Shares Outstanding", market_cap: "Market Cap", issue_type: "Issue Type"
+  shares_outstanding: "Shares Outstanding", market_cap: "Market Cap", issue_type: "Issue Type",
+  spread_bps: "Spread (bps)", book_imbalance: "Book Imbalance",
+  liquidity_score: "Liquidity", trade_imbalance: "Trade Imbalance",
+  cvd: "CVD", cross_venue_dislocation_bps: "Cross-Venue (bps)",
+  news_count_5m: "News (5m)", news_count_15m: "News (15m)",
+  news_velocity: "News Velocity %", news_sources_15m: "News Sources (15m)",
+  stream_age_ms: "Stream Age (ms)"
 };
 const pctFields = new Set<Field>([
   "change_pct_prev_close","change_pct_1m","change_pct_5m","change_pct_15m",
@@ -136,8 +142,12 @@ function visibleRows() {
 }
 
 function defaultColumns(): Column[] {
-  return ["price","change","change_pct_5m","day_volume","volume_1m","shares_float","market_cap"]
-    .map(field => ({ field: field as Field, width: 120, visible: true }));
+  return [
+    "price","change","change_pct_5m","day_volume","volume_1m",
+    "shares_float","market_cap","spread_bps","book_imbalance",
+    "trade_imbalance","liquidity_score","news_count_5m","news_velocity",
+    "news_sources_15m","stream_age_ms"
+  ].map(field => ({ field: field as Field, width: 120, visible: true }));
 }
 
 function renderNews() {
