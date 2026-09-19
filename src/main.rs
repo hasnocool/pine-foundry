@@ -1708,6 +1708,7 @@ pub(crate) async fn ingest_book(
     symbol: String,
     provider: providers::ProviderId,
     venue: String,
+    first_sequence: Option<u64>,
     sequence: Option<u64>,
     snapshot: bool,
     bids: Vec<BookLevel>,
