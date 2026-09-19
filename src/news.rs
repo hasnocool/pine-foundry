@@ -28,6 +28,23 @@ pub struct NewsArticle {
     pub subreddit: Option<String>,
     pub published_at: Option<String>,
     pub published_at_ms: Option<i64>,
+    #[serde(default)]
+    pub event_type: String,
+    #[serde(default)]
+    pub cluster_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StoryCluster {
+    pub id: String,
+    pub key: String,
+    pub canonical_title: String,
+    pub first_seen_ms: Option<i64>,
+    pub last_seen_ms: Option<i64>,
+    pub article_count: usize,
+    pub sources: Vec<String>,
+    pub tickers: Vec<String>,
+    pub event_type: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -46,6 +63,7 @@ pub struct NewsRouter {
     client: Client,
     health: Arc<RwLock<HashMap<String, NewsProviderHealth>>>,
     cache: Arc<RwLock<Vec<NewsArticle>>>,
+    clusters: Arc<RwLock<HashMap<String, StoryCluster>>>,
 }
 
 impl NewsRouter {
@@ -88,6 +106,7 @@ impl NewsRouter {
             client,
             health: Arc::new(RwLock::new(health)),
             cache: Arc::new(RwLock::new(Vec::new())),
+            clusters: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -99,6 +118,12 @@ impl NewsRouter {
 
     pub async fn cache(&self) -> Vec<NewsArticle> {
         self.cache.read().await.clone()
+    }
+
+    pub async fn clusters(&self) -> Vec<StoryCluster> {
+        let mut items = self.clusters.read().await.values().cloned().collect::<Vec<_>>();
+        items.sort_by(|a, b| b.last_seen_ms.cmp(&a.last_seen_ms));
+        items
     }
 
     pub async fn search_all(
@@ -257,7 +282,7 @@ impl NewsRouter {
         Ok(articles)
     }
 
-    pub async fn refresh_configured(&self) {
+    pub async fn refresh_configured(&self) -> Vec<NewsArticle> {
         let tickers = csv_env("PINE_FOUNDRY_NEWS_TICKERS", "BTC,ETH,SOL");
         let queries = csv_env("PINE_FOUNDRY_NEWS_QUERIES", "");
 
@@ -271,12 +296,15 @@ impl NewsRouter {
             }
         }
 
+        let mut collected = Vec::new();
         let mut worker = stream::iter(jobs).buffer_unordered(configured_concurrency());
         while let Some(result) = worker.next().await {
-            if let Err(error) = result {
-                eprintln!("news feed: {error}");
+            match result {
+                Ok(mut articles) => collected.append(&mut articles),
+                Err(error) => eprintln!("news feed: {error}"),
             }
         }
+        dedupe_and_sort(collected)
     }
 
     async fn cache_articles(&self, articles: &[NewsArticle]) {
@@ -293,6 +321,7 @@ impl NewsRouter {
         }
 
         cache.sort_by(|a, b| b.published_at_ms.cmp(&a.published_at_ms));
+        update_clusters_locked(&self.clusters, articles).await;
         let max_items = env::var("PINE_FOUNDRY_NEWS_CACHE_SIZE")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
@@ -361,7 +390,7 @@ impl NewsRouter {
     }
 }
 
-pub async fn run_news_feed(router: Arc<NewsRouter>) {
+pub async fn run_news_feed(router: Arc<NewsRouter>, state: crate::AppState) {
     let poll_secs = env::var("PINE_FOUNDRY_NEWS_POLL_SECS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -369,7 +398,8 @@ pub async fn run_news_feed(router: Arc<NewsRouter>) {
         .clamp(15, 3600);
 
     loop {
-        router.refresh_configured().await;
+        let articles = router.refresh_configured().await;
+        crate::ingest_news_articles(&state, &articles).await;
         sleep(Duration::from_secs(poll_secs)).await;
     }
 }
@@ -601,6 +631,8 @@ impl RssItem {
             subreddit: reddit_subreddit_from_url(&self.link),
             published_at: self.published_at.clone(),
             published_at_ms: self.published_at.as_deref().and_then(parse_date_ms),
+            event_type: String::new(),
+            cluster_id: String::new(),
         }
     }
 }
@@ -745,6 +777,10 @@ fn parse_date_ms(value: &str) -> Option<i64> {
 }
 
 fn dedupe_and_sort(mut articles: Vec<NewsArticle>) -> Vec<NewsArticle> {
+    for article in &mut articles {
+        article.event_type = classify_catalyst(&article.title, article.description.as_deref());
+        article.cluster_id = cluster_id_for(&article.title);
+    }
     let mut seen = HashSet::new();
     articles.retain(|article| {
         let canonical = article.url.trim().to_ascii_lowercase();
@@ -754,6 +790,112 @@ fn dedupe_and_sort(mut articles: Vec<NewsArticle>) -> Vec<NewsArticle> {
     });
     articles.sort_by(|a, b| b.published_at_ms.cmp(&a.published_at_ms));
     articles
+}
+
+
+
+fn classify_catalyst(title: &str, description: Option<&str>) -> String {
+    let text = format!("{} {}", title, description.unwrap_or_default()).to_ascii_lowercase();
+    for (needles, kind) in [
+        (&["acquire", "acquisition", "merger", "takeover"], "m_and_a"),
+        (&["earnings", "eps", "revenue", "quarter"], "earnings"),
+        (&["guidance", "outlook", "forecast"], "guidance"),
+        (&["offering", "dilution", "atm", "shares"], "offering"),
+        (&["buyback", "repurchase"], "buyback"),
+        (&["dividend", "distribution"], "dividend"),
+        (&["fda", "approval", "clinical trial"], "fda_or_clinical"),
+        (&["lawsuit", "litigation", "investigation", "sec probe"], "legal_or_regulatory"),
+        (&["bankruptcy", "chapter 11"], "bankruptcy"),
+        (&["ceo", "chief executive", "management change"], "management"),
+        (&["contract", "award", "partnership"], "contract_or_partnership"),
+        (&["hack", "exploit", "breach"], "security_incident"),
+        (&["etf", "exchange-traded fund"], "etf"),
+        (&["tariff", "rate decision", "interest rate"], "macro"),
+    ] {
+        if needles.iter().any(|needle| text.contains(needle)) {
+            return kind.to_string();
+        }
+    }
+    "general".to_string()
+}
+
+fn cluster_key(title: &str) -> String {
+    title
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+        .filter(|ch| *ch != ' ')
+        .take(180)
+        .collect()
+}
+
+fn cluster_id_for(title: &str) -> String {
+    let key = cluster_key(title);
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in key.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("cluster-{hash:016x}")
+}
+
+async fn update_clusters_locked(
+    clusters: &Arc<RwLock<HashMap<String, StoryCluster>>>,
+    articles: &[NewsArticle],
+) {
+    if articles.is_empty() {
+        return;
+    }
+    let mut map = clusters.write().await;
+    for article in articles {
+        let id = if article.cluster_id.is_empty() {
+            cluster_id_for(&article.title)
+        } else {
+            article.cluster_id.clone()
+        };
+        let entry = map.entry(id.clone()).or_insert_with(|| StoryCluster {
+            id: id.clone(),
+            key: cluster_key(&article.title),
+            canonical_title: article.title.clone(),
+            first_seen_ms: article.published_at_ms,
+            last_seen_ms: article.published_at_ms,
+            article_count: 0,
+            sources: Vec::new(),
+            tickers: Vec::new(),
+            event_type: article.event_type.clone(),
+        });
+        entry.article_count += 1;
+        entry.first_seen_ms = match (entry.first_seen_ms, article.published_at_ms) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (None, value) => value,
+            (value, None) => value,
+        };
+        entry.last_seen_ms = match (entry.last_seen_ms, article.published_at_ms) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (None, value) => value,
+            (value, None) => value,
+        };
+        if let Some(source) = article.source.as_ref() {
+            if !entry.sources.contains(source) {
+                entry.sources.push(source.clone());
+            }
+        }
+        if let Some(ticker) = article.ticker.as_ref() {
+            if !entry.tickers.contains(ticker) {
+                entry.tickers.push(ticker.clone());
+            }
+        }
+    }
+    if map.len() > 500 {
+        let mut ids = map
+            .values()
+            .filter_map(|item| item.last_seen_ms.map(|ts| (item.id.clone(), ts)))
+            .collect::<Vec<_>>();
+        ids.sort_by_key(|(_, ts)| *ts);
+        for (id, _) in ids.into_iter().take(map.len().saturating_sub(500)) {
+            map.remove(&id);
+        }
+    }
 }
 
 fn now_ms() -> i64 {
