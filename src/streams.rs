@@ -129,11 +129,13 @@ impl StreamHealthStore {
 fn update_sequence(item: &mut StreamHealth, sequence: Option<u64>) {
     if let Some(current) = sequence {
         if let Some(previous) = item.last_sequence {
-            if current <= previous {
+            if current <= previous || current > previous.saturating_add(1) {
                 item.sequence_gap_count = item.sequence_gap_count.saturating_add(1);
             }
         }
-        item.last_sequence = Some(current);
+        if item.last_sequence.map(|previous| current > previous).unwrap_or(true) {
+            item.last_sequence = Some(current);
+        }
     }
 }
 
