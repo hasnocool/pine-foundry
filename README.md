@@ -20,7 +20,8 @@ It is an original implementation inspired by the public workflow of desktop mark
 - Reddit RSS and JSON search.
 - Google News RSS search.
 - NewsAPI with local request-budget guards.
-- News URL deduplication and story clustering.
+- News URL deduplication and semantic-hybrid story clustering.
+- Configurable issuer-specific RSS/Atom feeds.
 - Deterministic catalyst classification.
 - SEC EDGAR filing ingestion.
 - Canadian SEDAR+/TSX disclosure discovery through public Google News RSS restrictions.
@@ -104,6 +105,9 @@ PINE_FOUNDRY_NEWS_LIMIT=25
 PINE_FOUNDRY_NEWS_LOOKBACK_HOURS=24
 PINE_FOUNDRY_NEWS_CONCURRENCY=4
 PINE_FOUNDRY_NEWS_CACHE_SIZE=500
+PINE_FOUNDRY_NEWS_CLUSTER_THRESHOLD=0.58
+PINE_FOUNDRY_NEWS_CLUSTER_WINDOW_MINS=360
+PINE_FOUNDRY_ISSUER_FEEDS=
 PINE_FOUNDRY_NEWSAPI_MIN_INTERVAL_SECS=1800
 PINE_FOUNDRY_NEWSAPI_DAILY_LIMIT=90
 ~~~
@@ -204,6 +208,22 @@ U.S.:
 Canada:
 - public Google News RSS discovery restricted to SEDAR+ and TSX pages.
 - deliberately avoids undocumented SEDAR+ internal APIs.
+
+## Research storage
+
+The live event fabric remains asynchronous JSONL. Research storage is downstream
+and can be benchmarked without changing the scanner hot path:
+
+~~~text
+python3 -m pip install duckdb
+python3 scripts/benchmark_event_storage.py
+~~~
+
+The benchmark compares JSONL parsing, DuckDB-over-JSONL, materialized DuckDB,
+and Parquet query paths. See docs/research-storage.md.
+
+Issuer-specific public RSS/Atom sources can be added with
+PINE_FOUNDRY_ISSUER_FEEDS. See docs/issuer-feeds.md.
 
 ## Event journal and replay
 
