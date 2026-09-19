@@ -295,6 +295,10 @@ struct ScannerRow {
     news_velocity: f64,
     news_sources_15m: f64,
     stream_age_ms: f64,
+    relative_volume_15m: f64,
+    volatility_15m_pct: f64,
+    executable_buy_1000: f64,
+    executable_sell_1000: f64,
     session: MarketSession,
     updated_at_ms: i64,
 }
@@ -693,6 +697,33 @@ fn metrics(s: &SecurityState) -> Metrics {
     let volume_1m = s.minute_buckets.back().map(|b| b.volume).unwrap_or(0.0);
     let book = current_book_metrics(s);
     let (news_count_5m, news_count_15m, news_velocity, news_sources_15m) = news_metrics(s);
+    let avg_volume_15m = if s.minute_buckets.is_empty() {
+        0.0
+    } else {
+        s.minute_buckets.iter().map(|bucket| bucket.volume).sum::<f64>()
+            / s.minute_buckets.len() as f64
+    };
+    let relative_volume_15m = if avg_volume_15m > 0.0 {
+        volume_1m / avg_volume_15m
+    } else {
+        0.0
+    };
+    let mut returns = Vec::new();
+    for window in s.minute_buckets.as_slices().0.windows(2) {
+        if let [a, b] = window {
+            if a.close_price > 0.0 && b.close_price > 0.0 {
+                returns.push((b.close_price / a.close_price).ln());
+            }
+        }
+    }
+    let volatility_15m_pct = if returns.len() > 1 {
+        let mean = returns.iter().sum::<f64>() / returns.len() as f64;
+        let variance = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>()
+            / (returns.len() - 1) as f64;
+        variance.sqrt() * 100.0
+    } else {
+        0.0
+    };
     let total_trade_volume = s.buy_volume + s.sell_volume;
     let trade_imbalance = if total_trade_volume > 0.0 {
         Some((s.buy_volume - s.sell_volume) / total_trade_volume)
@@ -718,6 +749,10 @@ fn metrics(s: &SecurityState) -> Metrics {
         news_velocity,
         news_sources_15m,
         stream_age_ms: (now_ms() - s.last_updated_ms).max(0) as f64,
+        relative_volume_15m,
+        volatility_15m_pct,
+        executable_buy_1000: book.executable_buy_1000,
+        executable_sell_1000: book.executable_sell_1000,
     }
 }
 
@@ -748,6 +783,10 @@ fn row(s: &SecurityState) -> ScannerRow {
         news_velocity: m.news_velocity,
         news_sources_15m: m.news_sources_15m,
         stream_age_ms: m.stream_age_ms,
+        relative_volume_15m: m.relative_volume_15m,
+        volatility_15m_pct: m.volatility_15m_pct,
+        executable_buy_1000: m.executable_buy_1000,
+        executable_sell_1000: m.executable_sell_1000,
         session: s.session,
         updated_at_ms: s.last_updated_ms,
     }
@@ -779,6 +818,10 @@ fn field_value(field: Field, s: &SecurityState) -> Option<f64> {
         Field::NewsVelocity => Some(m.news_velocity),
         Field::NewsSources15m => Some(m.news_sources_15m),
         Field::StreamAgeMs => Some(m.stream_age_ms),
+        Field::RelativeVolume15m => Some(m.relative_volume_15m),
+        Field::Volatility15mPct => Some(m.volatility_15m_pct),
+        Field::ExecutableBuy1000 => Some(m.executable_buy_1000),
+        Field::ExecutableSell1000 => Some(m.executable_sell_1000),
     }
 }
 
@@ -828,6 +871,10 @@ fn compare_rows(a: &ScannerRow, b: &ScannerRow, sort: &SortSpec) -> std::cmp::Or
             Field::NewsVelocity => Some(r.news_velocity),
             Field::NewsSources15m => Some(r.news_sources_15m),
             Field::StreamAgeMs => Some(r.stream_age_ms),
+            Field::RelativeVolume15m => Some(r.relative_volume_15m),
+            Field::Volatility15mPct => Some(r.volatility_15m_pct),
+            Field::ExecutableBuy1000 => Some(r.executable_buy_1000),
+            Field::ExecutableSell1000 => Some(r.executable_sell_1000),
         }
     };
     let order = match (val(a), val(b)) {
