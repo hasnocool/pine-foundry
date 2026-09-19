@@ -30,6 +30,17 @@ type Row = {
   market_cap: number | null;
 };
 type Preset = { id: string; name: string; builtin: boolean; definition: Definition };
+type NewsArticle = {
+  id: string;
+  provider: string;
+  ticker: string | null;
+  title: string;
+  description: string | null;
+  url: string;
+  source: string | null;
+  subreddit: string | null;
+  published_at: string | null;
+};
 type Event =
   | { type: "snapshot"; total_matches: number; rows: Row[] }
   | { type: "result_added"; row: Row }
@@ -54,6 +65,8 @@ const state = {
   totalMatches: 0,
   presets: [] as Preset[],
   socket: null as WebSocket | null,
+  news: [] as NewsArticle[],
+  newsQuery: "BTC",
 };
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -65,6 +78,10 @@ function fmt(v: number | null | undefined, mode = "num") {
   if (Math.abs(v) >= 1e6) return `${(v/1e6).toFixed(2)}M`;
   if (Math.abs(v) >= 1e3) return `${(v/1e3).toFixed(1)}K`;
   return String(Math.round(v));
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, char => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", """:"&quot;", "'":"&#39;" }[char] ?? char));
 }
 
 function value(row: Row, field: Field): number | undefined {
@@ -97,6 +114,32 @@ function defaultColumns(): Column[] {
     .map(field => ({ field: field as Field, width: 120, visible: true }));
 }
 
+function renderNews() {
+  return `
+    <section class="panel news-panel">
+      <div class="news-head">
+        <div>
+          <strong>News</strong>
+          <span class="muted">Reddit · Google News · NewsAPI</span>
+        </div>
+        <div class="news-controls">
+          <input id="news-query" value="${escapeHtml(state.newsQuery)}" placeholder="ticker or query">
+          <button id="news-search">Search</button>
+        </div>
+      </div>
+      <div class="news-list">
+        ${state.news.length ? state.news.slice(0,12).map(article => `
+          <article class="news-item">
+            <a href="${escapeHtml(article.url)}" target="_blank" rel="noopener noreferrer">
+              <strong>${escapeHtml(article.title)}</strong>
+            </a>
+            <div class="news-meta">${escapeHtml(article.source ?? article.subreddit ?? article.provider)} · ${escapeHtml(article.published_at ?? "")}</div>
+            ${article.description ? `<p>${escapeHtml(article.description)}</p>` : ""}
+          </article>`).join("") : "<p class='muted'>No cached news results yet.</p>"}
+      </div>
+    </section>`;
+}
+
 function render() {
   const def = state.definition;
   if (!def) return;
@@ -106,6 +149,7 @@ function render() {
         <div><h1>Pine Foundry</h1><p>Real-time market scanner</p></div>
         <div class="live"><i></i>${state.socket?.readyState === WebSocket.OPEN ? "LIVE" : "OFFLINE"}</div>
       </header>
+      ${renderNews()}
       <main class="layout">
         <aside class="panel filters">
           <div class="heading"><strong>Scanner</strong><select id="preset">
@@ -138,6 +182,13 @@ function render() {
 }
 
 function wire() {
+  document.querySelector<HTMLInputElement>("#news-query")?.addEventListener("keydown", e => {
+    if (e.key === "Enter") void loadNews((e.target as HTMLInputElement).value);
+  });
+  document.querySelector("#news-search")?.addEventListener("click", () => {
+    const query = document.querySelector<HTMLInputElement>("#news-query")?.value ?? state.newsQuery;
+    void loadNews(query);
+  });
   document.querySelector<HTMLSelectElement>("#preset")?.addEventListener("change", async e => {
     const p = state.presets.find(x => x.id === (e.target as HTMLSelectElement).value);
     if (!p) return;
@@ -245,7 +296,22 @@ async function boot() {
   }
   render();
   await snapshot();
+  await loadNews(state.newsQuery);
   connect();
+}
+
+async function loadNews(query: string) {
+  const clean = query.trim();
+  if (!clean) return;
+  state.newsQuery = clean;
+  try {
+    const response = await fetch(`${API}/api/news/ticker/${encodeURIComponent(clean)}`);
+    if (!response.ok) throw new Error(await response.text());
+    state.news = await response.json() as NewsArticle[];
+  } catch {
+    state.news = [];
+  }
+  render();
 }
 
 boot().catch(e => { app.innerHTML = `<pre class="error">${String(e)}</pre>`; });
