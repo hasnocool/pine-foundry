@@ -80,6 +80,21 @@ Configure live polling with PINE_FOUNDRY_FEED, PINE_FOUNDRY_POLL_SECS, PINE_FOUN
 
 See docs/providers.md for the complete route catalog and limitations.
 
+## Expanded keyless live markets
+
+The default live runtime now runs independent feeds for:
+
+- U.S. equities: TradingView America, Yahoo Finance, Nasdaq.
+- Canadian equities: TradingView Canada for TSX/TSXV plus Yahoo Canadian symbols.
+- Crypto: Binance, Kraken, Coinbase.
+- FX: Yahoo Finance FX, TradingView Forex, Frankfurter reference rates.
+
+Default symbols:
+
+    PINE_FOUNDRY_CRYPTO_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
+    PINE_FOUNDRY_FX_PAIRS=EURUSD=X,USDCAD=X,GBPUSD=X,USDJPY=X
+
+See docs/providers.md for route coverage, fallback behavior, normalization and provider limitations.
 ## Architecture
 
 ```
