@@ -72,6 +72,7 @@ pub struct NewsRouter {
     cache: Arc<RwLock<Vec<NewsArticle>>>,
     clusters: Arc<RwLock<HashMap<String, StoryCluster>>>,
     newsapi_control: Arc<RwLock<NewsApiControl>>,
+    processed_news: Arc<RwLock<HashSet<String>>>,
 }
 
 impl NewsRouter {
@@ -120,6 +121,7 @@ impl NewsRouter {
                 window_day: String::new(),
                 day_count: 0,
             })),
+            processed_news: Arc::new(RwLock::new(HashSet::new())),
         })
     }
 
@@ -349,7 +351,19 @@ impl NewsRouter {
                 Err(error) => eprintln!("news feed: {error}"),
             }
         }
-        dedupe_and_sort(collected)
+        let articles = dedupe_and_sort(collected);
+        let mut seen = self.processed_news.write().await;
+        let mut fresh = Vec::new();
+        for article in articles {
+            let key = canonical_article_key(&article);
+            if seen.insert(key) {
+                fresh.push(article);
+            }
+        }
+        if seen.len() > 10_000 {
+            seen.clear();
+        }
+        fresh
     }
 
     async fn cache_articles(&self, articles: &[NewsArticle]) {
