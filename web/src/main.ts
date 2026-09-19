@@ -81,7 +81,16 @@ function fmt(v: number | null | undefined, mode = "num") {
 }
 
 function escapeHtml(value: string) {
-  return value.replace(/[&<>"']/g, char => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", """:"&quot;", "'":"&#39;" }[char] ?? char));
+  return value.replace(/[&<>"']/g, char => {
+    const entities: Record<string, string> = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    };
+    return entities[char] ?? char;
+  });
 }
 
 function value(row: Row, field: Field): number | undefined {
