@@ -547,28 +547,36 @@ fn normalize_ticker(ticker: &str) -> String {
     value
 }
 
-fn broad_ticker_query(ticker: &str) -> String {
-    let aliases = match ticker {
-        "BTC" => Some("Bitcoin"),
-        "ETH" => Some("Ethereum"),
-        "SOL" => Some("Solana"),
-        "XRP" => Some("XRP Ripple"),
-        "DOGE" => Some("Dogecoin"),
-        "ADA" => Some("Cardano"),
-        "AVAX" => Some("Avalanche"),
-        "BNB" => Some("BNB Binance"),
-        "DOT" => Some("Polkadot"),
-        "LINK" => Some("Chainlink"),
-        _ => None,
-    };
-
-    match aliases {
-        Some(alias) => format!(
-            "(\"{}{}\" OR \"{}\" OR \"{}\")",
-            "$", ticker, ticker, alias
-        ),
-        None => format!("(\"{}{}\" OR \"{}\")", "$", ticker, ticker),
+fn configured_aliases(ticker: &str) -> Vec<String> {
+    let mut aliases = Vec::new();
+    let raw = env::var("PINE_FOUNDRY_NEWS_ALIASES").unwrap_or_default();
+    for entry in raw.split(';') {
+        let Some((key, values)) = entry.split_once('=') else { continue; };
+        if key.trim().eq_ignore_ascii_case(ticker) {
+            aliases.extend(values.split('|').map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned));
+        }
     }
+    aliases
+}
+
+fn broad_ticker_query(ticker: &str) -> String {
+    let mut terms = vec![format!("\"${}\"", ticker), format!("\"{}\"", ticker)];
+    terms.extend(match ticker {
+        "BTC" => vec!["Bitcoin".to_string()],
+        "ETH" => vec!["Ethereum".to_string()],
+        "SOL" => vec!["Solana".to_string()],
+        "XRP" => vec!["XRP Ripple".to_string()],
+        "DOGE" => vec!["Dogecoin".to_string()],
+        "ADA" => vec!["Cardano".to_string()],
+        "AVAX" => vec!["Avalanche".to_string()],
+        "BNB" => vec!["BNB Binance".to_string()],
+        "DOT" => vec!["Polkadot".to_string()],
+        "LINK" => vec!["Chainlink".to_string()],
+        _ => Vec::new(),
+    });
+    terms.extend(configured_aliases(ticker));
+    let body = terms.into_iter().collect::<HashSet<_>>().into_iter().collect::<Vec<_>>().join(" OR ");
+    format!("({body})")
 }
 
 fn parse_rss(
