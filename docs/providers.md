@@ -161,7 +161,7 @@ Local safety guards:
 - PINE_FOUNDRY_NEWSAPI_MIN_INTERVAL_SECS
 - PINE_FOUNDRY_NEWSAPI_DAILY_LIMIT
 
-These prevent the configured free/development API budget from being consumed by every ticker on every polling cycle.
+These apply an interval guard per normalized query plus one shared daily ceiling across all NewsAPI requests.
 
 ## Unified news model
 
