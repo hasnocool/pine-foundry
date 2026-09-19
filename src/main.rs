@@ -94,6 +94,10 @@ impl Field {
             Self::NewsVelocity => "News Velocity %",
             Self::NewsSources15m => "News Sources (15m)",
             Self::StreamAgeMs => "Stream Age (ms)",
+            Self::RelativeVolume15m => "Relative Volume (15m)",
+            Self::Volatility15mPct => "Volatility (15m) %",
+            Self::ExecutableBuy1000 => "Executable Buy $1K",
+            Self::ExecutableSell1000 => "Executable Sell $1K",
         }
     }
 }
