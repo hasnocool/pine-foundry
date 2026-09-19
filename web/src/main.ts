@@ -54,6 +54,37 @@ type NewsArticle = {
   source: string | null;
   subreddit: string | null;
   published_at: string | null;
+  event_type?: string;
+  cluster_id?: string;
+};
+type EvidenceVenue = {
+  provider: string;
+  venue: string;
+  last_price: number | null;
+  bid: number | null;
+  ask: number | null;
+  age_ms: number;
+  sequence: number | null;
+  book: {
+    best_bid: number | null;
+    best_ask: number | null;
+    spread_bps: number | null;
+    mid: number | null;
+    microprice: number | null;
+    bid_depth_5: number;
+    ask_depth_5: number;
+    bid_depth_10: number;
+    ask_depth_10: number;
+    book_imbalance: number | null;
+    liquidity_score: number;
+  };
+};
+type SymbolEvidence = {
+  symbol: string;
+  row: Row;
+  catalyst: string | null;
+  venues: EvidenceVenue[];
+  recent_news: NewsArticle[];
 };
 type Event =
   | { type: "snapshot"; total_matches: number; rows: Row[] }
@@ -90,6 +121,7 @@ const state = {
   socket: null as WebSocket | null,
   news: [] as NewsArticle[],
   newsQuery: "BTC",
+  evidence: null as SymbolEvidence | null,
 };
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -150,6 +182,36 @@ function defaultColumns(): Column[] {
   ].map(field => ({ field: field as Field, width: 120, visible: true }));
 }
 
+function renderEvidence() {
+  if (!state.evidence) return "";
+  const e = state.evidence;
+  return `
+    <section class="panel evidence-panel">
+      <div class="evidence-head">
+        <div><strong>${escapeHtml(e.symbol)} evidence</strong><span class="muted">${escapeHtml(e.catalyst ?? "no classified catalyst")}</span></div>
+        <button id="evidence-close">Close</button>
+      </div>
+      <div class="venue-grid">
+        ${e.venues.map(v => `
+          <div class="venue-card">
+            <strong>${escapeHtml(v.venue)}</strong>
+            <span class="muted">${escapeHtml(v.provider)}</span>
+            <div>Last: ${fmt(v.last_price, "price")} · Bid: ${fmt(v.bid, "price")} · Ask: ${fmt(v.ask, "price")}</div>
+            <div>Spread: ${fmt(v.book.spread_bps)} bps · Imbalance: ${fmt(v.book.book_imbalance, "pct")}</div>
+            <div>Liquidity: ${fmt(v.book.liquidity_score)} · Age: ${fmt(v.age_ms)} ms</div>
+          </div>`).join("")}
+      </div>
+      <div class="evidence-news">
+        <strong>Related news</strong>
+        ${e.recent_news.slice(0,6).map(article => `
+          <a href="${escapeHtml(article.url)}" target="_blank" rel="noopener noreferrer">
+            ${escapeHtml(article.title)}
+            <span>${escapeHtml(article.event_type ?? article.provider)}</span>
+          </a>`).join("") || "<p class='muted'>No recent related news.</p>"}
+      </div>
+    </section>`;
+}
+
 function renderNews() {
   return `
     <section class="panel news-panel">
@@ -186,6 +248,7 @@ function render() {
         <div class="live"><i></i>${state.socket?.readyState === WebSocket.OPEN ? "LIVE" : "OFFLINE"}</div>
       </header>
       ${renderNews()}
+      ${renderEvidence()}
       <main class="layout">
         <aside class="panel filters">
           <div class="heading"><strong>Scanner</strong><select id="preset">
@@ -209,7 +272,7 @@ function render() {
             <th>Symbol</th>
             ${def.columns.filter(c=>c.visible).map(c=>`<th data-sort="${c.field}">${labels[c.field]}</th>`).join("")}
           </tr></thead><tbody>
-            ${visibleRows().slice(0,250).map(r => `<tr><td class="symbol">${r.symbol}</td>${def.columns.filter(c=>c.visible).map(c=>`<td>${cell(r,c.field)}</td>`).join("")}</tr>`).join("")}
+            ${visibleRows().slice(0,250).map(r => `<tr data-symbol="${escapeHtml(r.symbol)}"><td class="symbol">${r.symbol}</td>${def.columns.filter(c=>c.visible).map(c=>`<td>${cell(r,c.field)}</td>`).join("")}</tr>`).join("")}
           </tbody></table></div>
         </section>
       </main>
@@ -218,6 +281,13 @@ function render() {
 }
 
 function wire() {
+  document.querySelectorAll<HTMLElement>("tbody tr[data-symbol]").forEach(row => row.addEventListener("click", () => {
+    void loadEvidence(row.dataset.symbol ?? "");
+  }));
+  document.querySelector("#evidence-close")?.addEventListener("click", () => {
+    state.evidence = null;
+    render();
+  });
   document.querySelector<HTMLInputElement>("#news-query")?.addEventListener("keydown", e => {
     if (e.key === "Enter") void loadNews((e.target as HTMLInputElement).value);
   });
@@ -334,6 +404,18 @@ async function boot() {
   await snapshot();
   await loadNews(state.newsQuery);
   connect();
+}
+
+async function loadEvidence(symbol: string) {
+  if (!symbol) return;
+  try {
+    const response = await fetch(`${API}/api/evidence/${encodeURIComponent(symbol)}`);
+    if (!response.ok) throw new Error(await response.text());
+    state.evidence = await response.json() as SymbolEvidence;
+  } catch {
+    state.evidence = null;
+  }
+  render();
 }
 
 async function loadNews(query: string) {
