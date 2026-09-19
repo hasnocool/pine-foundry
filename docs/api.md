@@ -160,6 +160,13 @@ Recent normalized cache:
 
 Story clusters:
 - GET /api/news/clusters
+- each cluster exposes id, canonical title, article/source/ticker counts, event type,
+  semantic-hybrid method name and observed similarity floor.
+- each normalized NewsArticle carries its cluster_id.
+
+Research storage:
+- scripts/benchmark_event_storage.py compares JSONL, DuckDB-over-JSONL,
+  materialized DuckDB and Parquet paths without entering the scanner hot path.
 
 News provider health:
 - GET /api/news/health

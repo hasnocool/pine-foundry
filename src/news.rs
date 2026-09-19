@@ -12,6 +12,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::RwLock;
+
+use crate::semantic;
 use tokio::time::{sleep, Duration};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,6 +47,10 @@ pub struct StoryCluster {
     pub sources: Vec<String>,
     pub tickers: Vec<String>,
     pub event_type: String,
+    pub cluster_method: String,
+    pub similarity: f64,
+    #[serde(skip)]
+    semantic: semantic::SemanticFeatures,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,6 +96,7 @@ impl NewsRouter {
             "reddit_json",
             "google_news_rss",
             "newsapi",
+            "issuer_rss",
         ];
         let mut health = HashMap::new();
         for provider in providers {
@@ -165,12 +172,12 @@ impl NewsRouter {
             }
         }
 
-        let articles = dedupe_and_sort(articles);
+        let mut articles = dedupe_and_sort(articles);
         if articles.is_empty() && !errors.is_empty() {
             return Err(errors.join("; "));
         }
 
-        self.cache_articles(&articles).await;
+        self.cache_articles(&mut articles).await;
         Ok(articles)
     }
 
@@ -330,6 +337,33 @@ impl NewsRouter {
         Ok(articles)
     }
 
+    pub async fn issuer_rss_search(
+        &self,
+        ticker: &str,
+        url: &str,
+        limit: usize,
+    ) -> Result<Vec<NewsArticle>, String> {
+        let normalized = normalize_ticker(ticker);
+        let provider = format!("issuer_rss:{}", normalized.to_ascii_lowercase());
+        let xml = self
+            .get_text(
+                &provider,
+                self.client
+                    .get(url)
+                    .header("Accept", "application/rss+xml, application/atom+xml, application/xml;q=0.9, */*;q=0.8"),
+            )
+            .await?;
+        let mut articles = parse_rss(&xml, &provider, &normalized, Some(&normalized));
+        for article in &mut articles {
+            article.source = article
+                .source
+                .clone()
+                .or_else(|| Some(format!("issuer:{normalized}")));
+        }
+        articles.truncate(limit.clamp(1, 100));
+        Ok(dedupe_and_sort(articles))
+    }
+
     pub async fn refresh_configured(&self) -> Vec<NewsArticle> {
         let tickers = csv_env("PINE_FOUNDRY_NEWS_TICKERS", "BTC,ETH,SOL");
         let queries = csv_env("PINE_FOUNDRY_NEWS_QUERIES", "");
@@ -343,6 +377,9 @@ impl NewsRouter {
                 jobs.push(self.search_all(&query, None, configured_limit()));
             }
         }
+        for (ticker, url) in configured_issuer_feeds() {
+            jobs.push(self.issuer_rss_search(&ticker, &url, configured_limit()));
+        }
 
         let mut collected = Vec::new();
         let mut worker = stream::iter(jobs).buffer_unordered(configured_concurrency());
@@ -352,7 +389,8 @@ impl NewsRouter {
                 Err(error) => eprintln!("news feed: {error}"),
             }
         }
-        let articles = dedupe_and_sort(collected);
+        let mut articles = dedupe_and_sort(collected);
+        self.cache_articles(&mut articles).await;
         let mut seen = self.processed_news.write().await;
         let mut fresh = Vec::new();
         for article in articles {
@@ -367,38 +405,57 @@ impl NewsRouter {
         fresh
     }
 
-    async fn cache_articles(&self, articles: &[NewsArticle]) {
+    async fn cache_articles(&self, articles: &mut [NewsArticle]) {
         if articles.is_empty() {
             return;
         }
 
-        let new_articles = {
-            let mut cache = self.cache.write().await;
-            let mut seen = cache
+        let new_indexes = {
+            let cache = self.cache.read().await;
+            let seen = cache
                 .iter()
                 .map(canonical_article_key)
                 .collect::<HashSet<_>>();
-            let mut new_articles = Vec::new();
-            for article in articles {
-                if seen.insert(canonical_article_key(article)) {
-                    cache.push(article.clone());
-                    new_articles.push(article.clone());
-                }
-            }
-
-            cache.sort_by(|a, b| b.published_at_ms.cmp(&a.published_at_ms));
-            let max_items = env::var("PINE_FOUNDRY_NEWS_CACHE_SIZE")
-                .ok()
-                .and_then(|value| value.parse::<usize>().ok())
-                .unwrap_or(500)
-                .clamp(50, 10_000);
-            if cache.len() > max_items {
-                cache.truncate(max_items);
-            }
-            new_articles
+            articles
+                .iter()
+                .enumerate()
+                .filter_map(|(index, article)| (!seen.contains(&canonical_article_key(article))).then_some(index))
+                .collect::<Vec<_>>()
         };
 
-        update_clusters_locked(&self.clusters, &new_articles).await;
+        let mut new_articles = new_indexes
+            .iter()
+            .filter_map(|index| articles.get(*index).cloned())
+            .collect::<Vec<_>>();
+
+        update_clusters_locked(&self.clusters, &mut new_articles).await;
+
+        for (index, clustered) in new_indexes.into_iter().zip(new_articles.iter()) {
+            if let Some(article) = articles.get_mut(index) {
+                article.cluster_id = clustered.cluster_id.clone();
+            }
+        }
+
+        let mut cache = self.cache.write().await;
+        let mut seen = cache
+            .iter()
+            .map(canonical_article_key)
+            .collect::<HashSet<_>>();
+        for article in new_articles {
+            if seen.insert(canonical_article_key(&article)) {
+                cache.push(article);
+            }
+        }
+
+        cache.sort_by(|a, b| b.published_at_ms.cmp(&a.published_at_ms));
+        let max_items = env::var("PINE_FOUNDRY_NEWS_CACHE_SIZE")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(500)
+            .clamp(50, 10_000);
+        if cache.len() > max_items {
+            cache.truncate(max_items);
+        }
     }
 
     async fn get_text(
@@ -868,7 +925,6 @@ fn canonical_article_key(article: &NewsArticle) -> String {
 fn dedupe_and_sort(mut articles: Vec<NewsArticle>) -> Vec<NewsArticle> {
     for article in &mut articles {
         article.event_type = classify_catalyst(&article.title, article.description.as_deref());
-        article.cluster_id = cluster_id_for(&article.title);
     }
     let mut seen = HashSet::new();
     articles.retain(|article| {
@@ -908,55 +964,65 @@ fn classify_catalyst(title: &str, description: Option<&str>) -> String {
     "general".to_string()
 }
 
-fn cluster_key(title: &str) -> String {
-    const STOP: &[&str] = &[
-        "the", "a", "an", "of", "to", "for", "and", "or", "on", "in",
-        "with", "by", "from", "inc", "corp", "ltd", "company", "shares",
-    ];
-    let mut tokens = title
-        .split_whitespace()
-        .map(|token| {
-            token
-                .chars()
-                .filter(|ch| ch.is_ascii_alphanumeric())
-                .collect::<String>()
-                .to_ascii_lowercase()
-        })
-        .filter(|token| token.len() >= 3 && !STOP.contains(&token.as_str()))
-        .collect::<Vec<_>>();
-    tokens.sort();
-    tokens.dedup();
-    tokens.truncate(16);
-    tokens.join("|")
-}
-
-fn cluster_id_for(title: &str) -> String {
-    let key = cluster_key(title);
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in key.as_bytes() {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("cluster-{hash:016x}")
-}
-
-async fn update_clusters_locked(
+fn configured_issuer_feeds() -> Vec<(String, String)> {
+    env::var("PINE_FOUNDRY_ISSUER_FEEDS")
+        .unwrap_or_default()
+        .split(';')
+        .filter_map(|entry| {
+            let (ticker, url) = entry.split_once('=')?;
+            let ticker = ticker.trim().trim_start_matches('async fn update_clusters_locked(
     clusters: &Arc<RwLock<HashMap<String, StoryCluster>>>,
-    articles: &[NewsArticle],
+    articles: &mut [NewsArticle],
 ) {
     if articles.is_empty() {
         return;
     }
+
+    let threshold = env::var("PINE_FOUNDRY_NEWS_CLUSTER_THRESHOLD")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(0.58)
+        .clamp(0.20, 0.95);
+    let window_ms = env::var("PINE_FOUNDRY_NEWS_CLUSTER_WINDOW_MINS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(360)
+        .clamp(5, 7 * 24 * 60) * 60_000;
+
     let mut map = clusters.write().await;
-    for article in articles {
-        let id = if article.cluster_id.is_empty() {
-            cluster_id_for(&article.title)
-        } else {
-            article.cluster_id.clone()
+    for article in articles.iter_mut() {
+        let features = semantic::features(
+            &article.title,
+            article.description.as_deref(),
+            article.ticker.as_deref(),
+            &article.event_type,
+        );
+
+        let mut best: Option<(String, f64)> = None;
+        for cluster in map.values() {
+            let in_window = match (article.published_at_ms, cluster.last_seen_ms) {
+                (Some(article_ts), Some(cluster_ts)) => article_ts.saturating_sub(cluster_ts).abs() <= window_ms,
+                _ => true,
+            };
+            if !in_window {
+                continue;
+            }
+
+            let score = semantic::similarity(&features, &cluster.semantic);
+            if best.as_ref().map(|(_, current)| score > *current).unwrap_or(true) {
+                best = Some((cluster.id.clone(), score));
+            }
+        }
+
+        let (id, similarity) = match best {
+            Some((id, score)) if score >= threshold => (id, score),
+            _ => (semantic::cluster_id(&features), 1.0),
         };
+        article.cluster_id = id.clone();
+
         let entry = map.entry(id.clone()).or_insert_with(|| StoryCluster {
             id: id.clone(),
-            key: cluster_key(&article.title),
+            key: features.terms.join("|"),
             canonical_title: article.title.clone(),
             first_seen_ms: article.published_at_ms,
             last_seen_ms: article.published_at_ms,
@@ -964,6 +1030,9 @@ async fn update_clusters_locked(
             sources: Vec::new(),
             tickers: Vec::new(),
             event_type: article.event_type.clone(),
+            cluster_method: semantic::METHOD.to_string(),
+            similarity: 1.0,
+            semantic: features.clone(),
         });
         entry.article_count += 1;
         entry.first_seen_ms = match (entry.first_seen_ms, article.published_at_ms) {
@@ -976,6 +1045,7 @@ async fn update_clusters_locked(
             (None, value) => value,
             (value, None) => value,
         };
+        entry.similarity = entry.similarity.min(similarity);
         if let Some(source) = article.source.as_ref() {
             if !entry.sources.contains(source) {
                 entry.sources.push(source.clone());
@@ -987,6 +1057,175 @@ async fn update_clusters_locked(
             }
         }
     }
+
+    if map.len() > 500 {
+        let mut ids = map
+            .values()
+            .filter_map(|item| item.last_seen_ms.map(|ts| (item.id.clone(), ts)))
+            .collect::<Vec<_>>();
+        ids.sort_by_key(|(_, ts)| *ts);
+        for (id, _) in ids.into_iter().take(map.len().saturating_sub(500)) {
+            map.remove(&id);
+        }
+    }
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock before epoch")
+        .as_millis() as i64
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ticker_query_expands_known_crypto_aliases() {
+        let query = broad_ticker_query("BTC");
+        assert!(query.contains("Bitcoin"));
+        assert!(query.contains("$"));
+    }
+
+    #[test]
+    fn rss_parser_handles_atom_search_results() {
+        let xml = r#"<feed xmlns="http://www.w3.org/2005/Atom">
+            <entry>
+                <title>Bitcoin headline</title>
+                <link href="https://www.reddit.com/r/Bitcoin/comments/abc/headline/" />
+                <updated>2026-09-19T12:34:56Z</updated>
+                <author><name>tester</name></author>
+            </entry>
+        </feed>"#;
+        let items = parse_rss(xml, "reddit_rss", "bitcoin", Some("BTC"));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].ticker.as_deref(), Some("BTC"));
+        assert_eq!(items[0].subreddit.as_deref(), Some("r/Bitcoin"));
+    }
+
+    #[test]
+    fn dedupe_is_url_based() {
+        let first = NewsArticle {
+            id: "a".into(),
+            provider: "one".into(),
+            query: "x".into(),
+            ticker: None,
+            title: "Headline".into(),
+            description: None,
+            url: "https://example.com/story".into(),
+            source: None,
+            author: None,
+            subreddit: None,
+            published_at: None,
+            published_at_ms: Some(2),
+            event_type: String::new(),
+            cluster_id: String::new(),
+        };
+        let second = NewsArticle { id: "b".into(), provider: "two".into(), ..first.clone() };
+        assert_eq!(dedupe_and_sort(vec![first, second]).len(), 1);
+    }
+}
+).to_ascii_uppercase();
+            let url = url.trim().to_string();
+            if ticker.is_empty() || url.is_empty() {
+                None
+            } else {
+                Some((ticker, url))
+            }
+        })
+        .collect()
+}
+
+async fn update_clusters_locked(
+    clusters: &Arc<RwLock<HashMap<String, StoryCluster>>>,
+    articles: &mut [NewsArticle],
+) {
+    if articles.is_empty() {
+        return;
+    }
+
+    let threshold = env::var("PINE_FOUNDRY_NEWS_CLUSTER_THRESHOLD")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(0.58)
+        .clamp(0.20, 0.95);
+    let window_ms = env::var("PINE_FOUNDRY_NEWS_CLUSTER_WINDOW_MINS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(360)
+        .clamp(5, 7 * 24 * 60) * 60_000;
+
+    let mut map = clusters.write().await;
+    for article in articles.iter_mut() {
+        let features = semantic::features(
+            &article.title,
+            article.description.as_deref(),
+            article.ticker.as_deref(),
+            &article.event_type,
+        );
+
+        let mut best: Option<(String, f64)> = None;
+        for cluster in map.values() {
+            let in_window = match (article.published_at_ms, cluster.last_seen_ms) {
+                (Some(article_ts), Some(cluster_ts)) => article_ts.saturating_sub(cluster_ts).abs() <= window_ms,
+                _ => true,
+            };
+            if !in_window {
+                continue;
+            }
+
+            let score = semantic::similarity(&features, &cluster.semantic);
+            if best.as_ref().map(|(_, current)| score > *current).unwrap_or(true) {
+                best = Some((cluster.id.clone(), score));
+            }
+        }
+
+        let (id, similarity) = match best {
+            Some((id, score)) if score >= threshold => (id, score),
+            _ => (semantic::cluster_id(&features), 1.0),
+        };
+        article.cluster_id = id.clone();
+
+        let entry = map.entry(id.clone()).or_insert_with(|| StoryCluster {
+            id: id.clone(),
+            key: features.terms.join("|"),
+            canonical_title: article.title.clone(),
+            first_seen_ms: article.published_at_ms,
+            last_seen_ms: article.published_at_ms,
+            article_count: 0,
+            sources: Vec::new(),
+            tickers: Vec::new(),
+            event_type: article.event_type.clone(),
+            cluster_method: semantic::METHOD.to_string(),
+            similarity: 1.0,
+            semantic: features.clone(),
+        });
+        entry.article_count += 1;
+        entry.first_seen_ms = match (entry.first_seen_ms, article.published_at_ms) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (None, value) => value,
+            (value, None) => value,
+        };
+        entry.last_seen_ms = match (entry.last_seen_ms, article.published_at_ms) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (None, value) => value,
+            (value, None) => value,
+        };
+        entry.similarity = entry.similarity.min(similarity);
+        if let Some(source) = article.source.as_ref() {
+            if !entry.sources.contains(source) {
+                entry.sources.push(source.clone());
+            }
+        }
+        if let Some(ticker) = article.ticker.as_ref() {
+            if !entry.tickers.contains(ticker) {
+                entry.tickers.push(ticker.clone());
+            }
+        }
+    }
+
     if map.len() > 500 {
         let mut ids = map
             .values()

@@ -5,6 +5,7 @@ set -euo pipefail
 cargo fmt --all -- --check
 cargo check
 cargo test
+python3 -m py_compile scripts/benchmark_event_storage.py
 
 if grep -R --line-number --exclude-dir=target --exclude='*.lock' 'block_on' src; then
   echo "error: blocking async execution found in src/" >&2

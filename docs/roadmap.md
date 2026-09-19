@@ -115,6 +115,10 @@ Each scanner row can expose:
 - Replay diagnostics.
 - Catalyst-to-market reaction datasets.
 - Event-study tooling.
+- JSONL vs DuckDB/Parquet benchmark tooling via `scripts/benchmark_event_storage.py`.
+- Optional materialization of the event journal into Parquet and a DuckDB research database.
+- Deterministic hybrid semantic story clustering using token similarity plus SimHash, with configurable time/similarity thresholds.
+- Configurable issuer-specific RSS/Atom feeds that enter the same normalized NewsArticle/event-journal path.
 
 ### P3 — AI
 
@@ -143,9 +147,9 @@ LLMs should not consume every market tick.
 
 ## Planned next iterations
 
-1. Durable DuckDB/Parquet research storage after benchmarking JSONL.
-2. Better semantic story clustering.
-3. More official issuer feeds.
+1. Use benchmark results to decide whether/where DuckDB or Parquet should become the durable research layer rather than replacing JSONL blindly.
+2. Evaluate local embedding models for a second-generation semantic clusterer without putting inference in the market tick path.
+3. Add more issuer-specific official feeds only when their public RSS/Atom contract is documented and stable.
 4. Canadian issuer-specific disclosure mapping where a documented public endpoint exists.
 5. Historical relative-volume and volatility baselines.
 6. More order-book depth and executable-size metrics.

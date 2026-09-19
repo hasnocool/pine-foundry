@@ -60,7 +60,7 @@ PINE_FOUNDRY_NEWSAPI_MIN_INTERVAL_SECS=1800
 PINE_FOUNDRY_NEWSAPI_DAILY_LIMIT=90
 ~~~
 
-News is classified deterministically into catalyst types before any AI processing. Stories are clustered across providers.
+News is classified deterministically into catalyst types before any AI processing. Stories are clustered across providers with a semantic-hybrid token/Jaccard/SimHash model. Clustering remains outside the market tick path.
 
 ## Regulatory/corporate feeds
 
@@ -80,6 +80,26 @@ PINE_FOUNDRY_CANADA_POLL_SECS=300
 ~~~
 
 Canadian discovery uses public Google News RSS queries constrained to SEDAR+ and TSX domains rather than undocumented SEDAR+ APIs.
+
+## Research storage
+
+Benchmark the existing JSONL event fabric before promoting another durable
+storage layer:
+
+~~~text
+python3 -m pip install duckdb
+python3 scripts/benchmark_event_storage.py
+~~~
+
+See docs/research-storage.md for the benchmark methodology and promotion rule.
+
+## Issuer-specific feeds
+
+~~~text
+PINE_FOUNDRY_ISSUER_FEEDS=AAPL=https://issuer.example/aapl/rss.xml
+~~~
+
+Use documented official or authorized RSS/Atom URLs. See docs/issuer-feeds.md.
 
 ## Event journal
 
