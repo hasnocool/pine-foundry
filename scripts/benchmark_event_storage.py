@@ -228,11 +228,11 @@ def main() -> int:
     benchmarks = []
     if args.mode == "benchmark":
         for name, operation in (
-        ("duckdb_jsonl_scan", lambda: connection.execute(duckdb_jsonl_query).fetchall()),
-        ("duckdb_table_scan", lambda: connection.execute(query).fetchall()),
-        ("parquet_scan", lambda: connection.execute(parquet_query).fetchall()),
-    ):
-        durations = timed(args.runs, operation)
+            ("duckdb_jsonl_scan", lambda: connection.execute(duckdb_jsonl_query).fetchall()),
+            ("duckdb_table_scan", lambda: connection.execute(query).fetchall()),
+            ("parquet_scan", lambda: connection.execute(parquet_query).fetchall()),
+        ):
+            durations = timed(args.runs, operation)
             benchmarks.append(
                 {
                     "name": name,
